@@ -1,14 +1,29 @@
 # Slidehandoff
 
-**HTML로 만든 장표를, 동료가 고칠 수 있는 PPT로.**
+**HTML 장표를 편집 가능한 PowerPoint로.**
 
-보고 직전에 숫자가 바뀌거나 자료를 넘겨받은 동료가 문구를 고쳐야 할 때가 있습니다. 장표가 이미지로만 남아 있으면 작은 수정도 다시 만들어야 합니다.
+AI 도구나 코드로 만든 HTML 발표 자료가 PPT 파일로도 필요할 때 사용합니다. 보고·발표·제출에 쓸 `.pptx` 파일을 내려받고, PowerPoint에서 문구와 숫자를 직접 수정할 수 있습니다.
 
-Slidehandoff는 HTML 장표를 읽어 PowerPoint에서 수정할 수 있는 `.pptx` 파일로 바꿉니다. 지원되는 글자·기본 도형·선은 각각의 객체로 남습니다.
+지원되는 글자·기본 도형·선은 각각의 편집 가능한 객체로 남습니다.
+
+[시작하기](#시작하기) · [예제](examples) · [지원 범위](docs/supported-inputs.md)
 
 ![가상 주간 보고 예제를 변환한 화면](docs/images/workflow.png)
 
 > **개발 미리보기입니다.** Windows에서 로컬 실행을 확인하고 있습니다. 아직 일반 사용자를 위한 설치 프로그램이나 판매 제품은 아닙니다. 변환 후 PowerPoint에서 글꼴, 줄바꿈과 겹침을 확인해 주세요.
+
+## 시작하기
+
+Windows, Node.js 24, Microsoft Edge가 필요합니다. PowerPoint는 내려받은 파일을 확인하고 수정할 때 사용합니다.
+
+```sh
+git clone https://github.com/Kyuhan1230/slidehandoff.git
+cd slidehandoff
+npm ci
+npm start
+```
+
+브라우저에서 `http://127.0.0.1:42337`을 엽니다. 종료할 때는 실행한 터미널에서 `Ctrl+C`를 누릅니다. 다른 프로그램이 포트를 사용하면 종료한 뒤 다시 실행하세요.
 
 ## 사용 방법
 
@@ -27,20 +42,7 @@ Slidehandoff는 HTML 장표를 읽어 PowerPoint에서 수정할 수 있는 `.pp
 | 지원되는 글자·기본 도형·선 | PowerPoint에서 수정 가능한 객체 |
 | PNG·JPEG, 복잡한 SVG 장식 | 위치를 유지한 그림 객체 |
 
-임의 웹사이트, 스크립트 실행이 필요한 화면, 모든 CSS 효과를 변환하는 도구는 아닙니다. 복잡한 SVG는 그림으로 남을 수 있습니다. 표·차트의 데이터 편집과 모든 글꼴의 동일한 재현은 지원을 보장하지 않습니다. [지원 범위](docs/supported-inputs.md)를 확인해 주세요.
-
-## 로컬에서 실행하기
-
-Windows, Node.js 24, Microsoft Edge가 필요합니다. PowerPoint는 내려받은 파일을 확인하고 수정할 때 사용합니다.
-
-```sh
-git clone https://github.com/Kyuhan1230/slidehandoff.git
-cd slidehandoff
-npm ci
-npm start
-```
-
-브라우저에서 `http://127.0.0.1:42337`을 엽니다. 종료할 때는 실행한 터미널에서 `Ctrl+C`를 누릅니다. 다른 프로그램이 포트를 사용하면 종료한 뒤 다시 실행하세요.
+HTML 발표 자료의 클릭 동작, 애니메이션, 실시간 계산은 PPT로 옮기지 않습니다. 스크립트로 내용을 생성하는 화면과 임의 웹사이트도 지원 대상이 아닙니다. 복잡한 SVG는 그림으로 남을 수 있습니다. 표·차트의 데이터 편집과 모든 CSS 효과·글꼴의 동일한 재현은 지원을 보장하지 않습니다. [지원 범위](docs/supported-inputs.md)를 확인해 주세요.
 
 ## 문서를 다루는 방식
 
@@ -50,6 +52,6 @@ npm start
 
 ## 개발 방향
 
-우선하는 일은 글자 누락과 겹침을 줄이고, 파일을 받은 사람이 후속 수정을 할 수 있게 만드는 것입니다. 시간 절감이나 사용자 만족도는 아직 측정하지 않았습니다.
+우선하는 일은 글자 누락과 겹침을 줄이고, 변환한 자료를 PowerPoint에서 이어서 다듬을 수 있게 만드는 것입니다. 혼자 만드는 보고서, 발표용 자료, PPT 제출과 동료에게 전달하는 상황을 함께 다룹니다. 시간 절감이나 사용자 만족도는 아직 측정하지 않았습니다.
 
 [이 도구가 다루는 업무 문제](docs/workflow.md) · [구조와 개발 안내](docs/development.md) · [라이선스 안내](NOTICE.md)
