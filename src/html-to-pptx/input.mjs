@@ -51,8 +51,18 @@ export async function readInput({html, assets: provided = [], slideSelector = nu
   };
   const tree = parse(original,{sourceCodeLocationInfo:true});
   const nodes=[...walkHtml(tree)];
+  const generated=nodes.find(n=>n.tagName==='html'&&attribute(n,'data-slidehandoff')!==undefined);
+  if(generated){
+    if(attribute(generated,'data-slidehandoff')!=='1')fail('INPUT_INVALID','지원하지 않는 Slidehandoff HTML 버전입니다.');
+    else input.profile='editable-slides-v1';
+    const roots=nodes.filter(n=>attribute(n,'data-slide')!==undefined);
+    if(!roots.length||roots.length>200)fail('INPUT_INVALID','장표는 1~200장이어야 합니다.');
+    input.pptxSizeEmu={width:Number(attribute(roots[0]??{},'data-ppt-width-emu')),height:Number(attribute(roots[0]??{},'data-ppt-height-emu'))};
+    if(roots.some(n=>Number(attribute(n,'data-ppt-width-emu'))!==input.pptxSizeEmu.width||Number(attribute(n,'data-ppt-height-emu'))!==input.pptxSizeEmu.height))fail('INPUT_INVALID','PPT 크기 메타데이터가 장표마다 다릅니다.');
+  }
   const dataNodes=nodes.filter(n=>n.tagName==='script'&&attribute(n,'id')==='project-data');
   if(dataNodes.length) {
+    if(generated){fail('INPUT_INVALID','현재 HTML과 project-data를 동시에 입력할 수 없습니다.');return input;}
     input.profile='project-data-v1';
     if(dataNodes.length!==1)fail('INPUT_INVALID','project-data 스크립트는 한 개여야 합니다.',location(dataNodes[0]));
     else {

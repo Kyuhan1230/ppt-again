@@ -1,6 +1,5 @@
 import test,{before,after} from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
 import http from 'node:http';
 import {createHtmlServer} from '../src/html-to-pptx/server.mjs';
 import {inspectPptxIndependently} from './inspect-pptx.mjs';
@@ -10,12 +9,11 @@ after(async()=>{await app?.close();});
 const post=(route,body,headers={})=>fetch(app.url+route,{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)});
 
 for(const example of [
-  {file:'weekly-review.html',slides:2,texts:20,ratio:16/9,title:'이번 주 진행 사항'},
-  {file:'delivery-timeline.html',slides:1,texts:9,ratio:4/3,title:'From draft to handoff'},
-  {file:'handoff-note.html',slides:1,texts:9,ratio:3/4,title:'다음 작업을 위한 메모'}
+  {file:'wide.html',slides:2,texts:2,ratio:16/9,title:'Current review',html:'<section data-slide style="width:960px;height:540px"><p style="font:24px Arial">Current review</p></section><section data-slide style="width:960px;height:540px"><p style="font:24px Arial">Next steps</p></section>'},
+  {file:'standard.html',slides:1,texts:1,ratio:4/3,title:'Plan',html:'<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><text x="40" y="80" style="font:24px Arial">Plan</text></svg>'},
+  {file:'portrait.html',slides:1,texts:1,ratio:3/4,title:'Notes',html:'<section data-slide style="width:600px;height:800px"><p style="font:24px Arial">Notes</p></section>'}
 ])test(`${example.file}: analyze, download and inspect editable output`,async()=>{
-  const original=await fs.readFile(new URL('../examples/'+example.file,import.meta.url));
-  const response=await post('/api/analyze',{html:original.toString('utf8'),fileName:example.file});
+  const response=await post('/api/analyze',{html:example.html,fileName:example.file});
   const job=await response.json();assert.equal(response.status,200,JSON.stringify(job));assert.equal(job.slideCount,example.slides);
   const preview=await fetch(app.url+job.slides[0].previewUrl);assert.equal(preview.status,200);assert.equal(preview.headers.get('content-type'),'image/png');
   const output=await post('/api/export',{jobId:job.id}),result=await output.json();assert.equal(output.status,200,JSON.stringify(result));
@@ -26,7 +24,6 @@ for(const example of [
   assert.ok(Math.abs(ppt.widthEmu/ppt.heightEmu-example.ratio)<0.00001);
   assert.ok(ppt.slides.flatMap(s=>s.objects).some(o=>o.kind==='text'&&o.text===example.title));
   assert.equal((await fetch(app.url+`/api/jobs/${job.id}/object-map`)).status,404);
-  assert.deepEqual(await fs.readFile(new URL('../examples/'+example.file,import.meta.url)),original);
 });
 
 test('private files, reports and path traversal are unavailable',async()=>{

@@ -21,9 +21,10 @@ tmp/
 Thumbs.db
 desktop.ini
 
-# Examples must be explicitly reviewed before inclusion.
-examples/*
-!examples/README.md
-!examples/weekly-review.html
-!examples/delivery-timeline.html
-!examples/handoff-note.html
+# Input and output documents stay local. Tests generate synthetic data in memory.
+.local/
+examples/
+*.html
+!web/html-to-pptx/index.html
+*.pptm
+*.ppsx

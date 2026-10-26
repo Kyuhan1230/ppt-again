@@ -25,3 +25,15 @@ export function identifyFontMappings(input){
   }
   return result;
 }
+
+// A Windows family name need not be a valid CSS local() full face name. Only
+// accept aliases backed by the same installed font bytes as our known profile.
+export function installedNativeAliases(){
+  const directories=[process.env.SystemRoot&&path.join(process.env.SystemRoot,'Fonts'),process.env.LOCALAPPDATA&&path.join(process.env.LOCALAPPDATA,'Microsoft','Windows','Fonts')].filter(Boolean),result=[];
+  for(const profile of profiles)for(const native of Object.values(profile.faces)){
+    if(native.family===native.localName||result.some(a=>a.family===native.family))continue;
+    const file=directories.map(d=>path.join(d,native.file)).find(f=>fs.existsSync(f)&&sha256(fs.readFileSync(f))===native.sha256);
+    if(file)result.push({family:native.family,localName:native.localName,sha256:native.sha256});
+  }
+  return result;
+}

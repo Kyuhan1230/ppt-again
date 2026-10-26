@@ -1,3 +1,4 @@
+import {canvasDiagnostics} from './canvas.mjs';
 const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const nonempty = v => typeof v === 'string' && v.trim().length > 0;
 const digest = v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
@@ -46,6 +47,7 @@ export function validateModel(value) {
     const assetIds = assets(d.assets, p('assets')), slideIds = new Set();
     const slides = array(d.slides, p('slides'));
     check(slides.length > 0, p('slides'), 'Expected at least one slide');
+    if(slides.every(record))for(const message of canvasDiagnostics({...d,slides}))check(false,p('pptxSizeEmu'),message);
     for (const [i, slide] of slides.entries()) {
       const sp = p(`slides[${i}]`);
       if (!record(slide)) { check(false, sp, 'Expected slide'); continue; }
@@ -85,7 +87,7 @@ export function validateModel(value) {
   if (!record(value)) check(false, '$', 'Expected a contract object');
   else if ('schemaVersion' in value) {
     check(value.schemaVersion === 1, 'schemaVersion', 'Unsupported version');
-    check(['project-data-v1', 'static-slides-v1', 'svg-slides-v1'].includes(value.profile), 'profile', 'Unsupported input profile');
+    check(['project-data-v1', 'static-slides-v1', 'svg-slides-v1', 'editable-slides-v1'].includes(value.profile), 'profile', 'Unsupported input profile');
     check(typeof value.source?.html === 'string', 'source.html', 'Expected HTML');
     check(digest(value.source?.sha256), 'source.sha256', 'Expected SHA-256');
     check(value.source?.slideSelector === null || nonempty(value.source?.slideSelector), 'source.slideSelector', 'Expected selector or null');

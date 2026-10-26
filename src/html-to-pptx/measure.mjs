@@ -1,11 +1,12 @@
 import {diagnostic,validateModel} from './model.mjs';
 import {resolveAsset} from './assets.mjs';
-import {identifyFontMappings} from './font-profiles.mjs';
+import {identifyFontMappings,installedNativeAliases} from './font-profiles.mjs';
 import {captureDecorations} from './decorations.mjs';
 import {measureSvgInput} from './svg-slides.mjs';
 
 // Runs inside a script-disabled browser. This is repository-owned measurement code.
-async function measurePage({selector,profile,timeoutMs,sourceHadScripts}) {
+async function measurePage({selector,profile,timeoutMs,sourceHadScripts,nativeAliases=[]}) {
+  const editable=profile==='editable-slides-v1',declared=editable||profile==='project-data-v1';
   const diagnostics=[];
   const issue=(code,message,slideId=null,nodeId=null,sourceRef=null)=>diagnostics.push({code,severity:'error',slideId,nodeId,sourceRef,message});
   const timeout=(promise)=>Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(new Error('loading timeout')),timeoutMs))]);
@@ -27,13 +28,17 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts}) {
     if(!ok){
       const faces=[...document.fonts].filter(f=>f.family.replace(/^["']|["']$/g,'')===family);
       if(faces.length){customFonts.add(family);try{await timeout(document.fonts.load(`20px "${family.replaceAll('"','\\"')}"`));ok=faces.every(f=>f.status==='loaded');}catch{ok=false;}}
-      else{try{const face=new FontFace('__availability_probe',`local("${family.replaceAll('"','\\"')}")`);await timeout(face.load());ok=true;}catch{ok=false;}}
+      else{
+        for(const localName of [family,...nativeAliases.filter(a=>a.family===family).map(a=>a.localName)]){
+          try{const face=new FontFace('__availability_probe',`local(${JSON.stringify(localName)})`);await timeout(face.load());ok=true;break;}catch{ok=false;}
+        }
+      }
     }
     fontAvailability.set(family,ok);return ok;
   };
   const slides=[],measurements=[];
   for(const [slideIndex,root] of roots.entries()) {
-    const id=(profile==='project-data-v1'?root.dataset.slideId:null)||root.id||`slide-${slideIndex+1}`;
+    const id=(declared?root.dataset.slideId:null)||root.id||`slide-${slideIndex+1}`;
     const rootStyle=getComputedStyle(root),before=root.getBoundingClientRect();
     const width=parseFloat(rootStyle.width),height=parseFloat(rootStyle.height);
     const widthValue=root.computedStyleMap?.().get('width')?.toString(),heightValue=root.computedStyleMap?.().get('height')?.toString();
@@ -43,12 +48,19 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts}) {
     const sourceTransformScale=round(before.width/width);
     if(slides.length&&(Math.abs(slides[0].widthCssPx-width)>.01||Math.abs(slides[0].heightCssPx-height)>.01))issue('UNSUPPORTED_OBJECT','한 PPT 안의 서로 다른 장표 크기는 지원하지 않습니다.',id);
     const renderScale=1280/Math.max(width,height),referenceSize={width:Math.round(width*renderScale),height:Math.round(height*renderScale)};
+    // The responsive frame is presentation chrome, not a clipping mask on the
+    // logical slide. Its dimensions must not crop a normalized measurement.
+    if(editable&&root.parentElement?.classList.contains('slide-view')){
+      root.parentElement.style.width=`${referenceSize.width}px`;root.parentElement.style.maxWidth='none';
+      root.parentElement.style.height=`${referenceSize.height}px`;root.parentElement.style.overflow='visible';
+    }
     // Render at the declared output size from the start; never rescale captures.
     root.style.setProperty('transform',`scale(${renderScale})`,'important');root.style.setProperty('transform-origin','0 0','important');
     const rr=root.getBoundingClientRect();
     const boxOf=el=>{const r=el.getBoundingClientRect();return {x:round((r.x-rr.x)/renderScale),y:round((r.y-rr.y)/renderScale),w:round(r.width/renderScale),h:round(r.height/renderScale)};};
     const nodes=[],objects=[],seen=new Set(),textOwners=new Set();let order=0;
-    const elements=profile==='project-data-v1'?[...root.querySelectorAll('[data-source-id]')]:[root,...root.querySelectorAll('*')];
+    const elements=declared?[...root.querySelectorAll('[data-source-id]')]:[root,...root.querySelectorAll('*')];
+    if(editable&&[...root.children].some(e=>!e.hasAttribute('data-source-id')))issue('UNSUPPORTED_OBJECT','객체 표식이 없는 장표 콘텐츠가 있습니다.',id);
     const hiddenByOpacity=el=>{for(let p=el;p;p=p.parentElement)if(Number(getComputedStyle(p).opacity)===0)return true;return false;};
     const plainStyle=st=>({fontFamily:familyName(st.fontFamily),fontSize:parseFloat(st.fontSize),fontWeight:Number(st.fontWeight)||400,color:st.color,align:st.textAlign,lineHeight:st.lineHeight,whiteSpace:st.whiteSpace,
       fill:st.backgroundColor,backgroundImage:st.backgroundImage,stroke:st.borderTopColor,strokeWidth:parseFloat(st.borderTopWidth)||0,borderStyle:st.borderTopStyle,radius:parseFloat(st.borderTopLeftRadius)||0,opacity:Number(st.opacity),padding:{top:parseFloat(st.paddingTop),right:parseFloat(st.paddingRight),bottom:parseFloat(st.paddingBottom),left:parseFloat(st.paddingLeft)}});
@@ -61,6 +73,7 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts}) {
         let text=child.nodeType===3?child.data:'\n';
         if(child.nodeType===3&&!['pre','pre-wrap','break-spaces'].includes(cs.whiteSpace))text=text.replace(cs.whiteSpace==='pre-line'?/[\t\r\f ]+/g:/[\t\r\n\f ]+/g,' ');
         const style={fontFamily:familyName(cs.fontFamily),fontSize:parseFloat(cs.fontSize),fontWeight:Number(cs.fontWeight)||400,fontStyle:cs.fontStyle,color:cs.color,textDecoration:cs.textDecorationLine,letterSpacing:cs.letterSpacing};
+        if(parseFloat(cs.webkitTextStrokeWidth)>0)style.outline={color:cs.webkitTextStrokeColor,width:parseFloat(cs.webkitTextStrokeWidth)};
         if(text)runs.push({text,style});
       }
       if(profile!=='project-data-v1'&&!['pre','pre-wrap','break-spaces'].includes(getComputedStyle(el).whiteSpace)){
@@ -89,7 +102,7 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts}) {
     for(const [index,el] of elements.entries()) {
       if(['STYLE','SCRIPT','LINK','META','BR'].includes(el.tagName)||el.closest('svg')&&el.tagName.toLowerCase()!=='svg')continue;
       const st=getComputedStyle(el);if(st.display==='none'||st.visibility==='hidden'||hiddenByOpacity(el))continue;
-      const sourceId=profile==='project-data-v1'?el.dataset.sourceId:null;
+      const sourceId=declared?el.dataset.sourceId:null;
       const nodeId=sourceId||el.id||`node-${index+1}`,sourceRef={slideId:id,...(sourceId?{elementId:sourceId}:{path:el.dataset.sourcePath??`node[${index}]`})};
       const at=(code,msg)=>issue(code,msg,id,nodeId,sourceRef);
       if(['CANVAS','IFRAME','VIDEO','AUDIO','OBJECT','EMBED','TABLE'].includes(el.tagName)){at('UNSUPPORTED_OBJECT',`${el.tagName} 객체는 지원하지 않습니다.`);continue;}
@@ -97,12 +110,30 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts}) {
       if(Number(st.opacity)<1&&el.children.length)at('UNSUPPORTED_OBJECT','여러 자식을 합성하는 컨테이너의 투명도는 지원하지 않습니다.');
       if(st.backgroundClip==='text')at('UNSUPPORTED_OBJECT','글자 윤곽으로 자르는 배경은 지원하지 않습니다.');
       for(const pseudo of ['::before','::after'])if(!['none','normal','""'].includes(getComputedStyle(el,pseudo).content))at('UNSUPPORTED_OBJECT',`CSS ${pseudo}의 생성 콘텐츠는 명시적인 HTML 요소로 넣어 주세요.`);
-      const box=boxOf(el);if(box.w<=0||box.h<=0)continue;
-      let kind=profile==='project-data-v1'?el.dataset.kind:null;
+      let kind=declared?el.dataset.kind:null;
+      let box=boxOf(el);
+      if(editable){
+        if(!['text','shape','line','image','group'].includes(kind)){at('UNSUPPORTED_OBJECT','지원하지 않는 편집 객체입니다.');continue;}
+        if(kind!=='text'&&(el.textContent.trim()||kind!=='line'&&el.children.length))at('UNSUPPORTED_OBJECT','이 객체 안에 추가된 콘텐츠를 편집 가능한 객체로 읽을 수 없습니다.');
+        if(kind==='text'&&[...el.querySelectorAll('*')].some(c=>!['SPAN','BR','B','I','STRONG','EM','U'].includes(c.tagName)))at('UNSUPPORTED_OBJECT','글자 객체 안의 비텍스트 콘텐츠는 지원하지 않습니다.');
+        const fields={x:'left',y:'top',w:'width',h:'height'},authored={};
+        // CSSOM stringifies numeric values to fewer significant digits. Read
+        // current inline px literals, and independently compare visible bounds.
+        const literals=new Map([...el.getAttribute('style').matchAll(/(?:^|;)\s*(left|top|width|height)\s*:\s*(-?(?:\d+\.?\d*|\.\d+)px)\s*(?:!important\s*)?(?=;|$)/gi)].map(m=>[m[1].toLowerCase(),m[2]]));
+        for(const [key,prop] of Object.entries(fields)){
+          const value=literals.get(prop)??el.style.getPropertyValue(prop);
+          if(!/^-?(?:\d+\.?\d*|\.\d+)px$/.test(value)){at('INPUT_INVALID','편집 객체의 논리 좌표는 px 값이어야 합니다.');continue;}
+          authored[key]=parseFloat(value);
+          if(Math.abs(authored[key]-box[key])>.05)at('UNSUPPORTED_OBJECT','현재 표시 배치와 객체의 논리 좌표가 다릅니다.');
+        }
+        if(st.position!=='absolute'||el.parentElement!==root)at('UNSUPPORTED_OBJECT','편집 객체는 장표에 직접 배치되어야 합니다.');
+        box=authored;
+      }
+      if((box.w<=0||box.h<=0)&&!(editable&&kind==='line'))continue;
       const isSvg=el.tagName.toLowerCase()==='svg';
       const children=[...el.children].filter(c=>!['BR','STYLE'].includes(c.tagName));
       const containsBlock=children.some(c=>!['inline','inline-block','contents'].includes(getComputedStyle(c).display));
-      const text=profile==='project-data-v1'?el.textContent:el.innerText;
+      const text=declared?el.textContent:el.innerText;
       const hasText=typeof text==='string'&&text.trim().length>0;
       const inlineParent=[...textOwners].some(owner=>owner.contains(el));
       if(hasText&&containsBlock&&[...el.childNodes].some(n=>n.nodeType===3&&n.textContent.trim()))at('UNSUPPORTED_OBJECT','블록과 직접 텍스트가 섞인 컨테이너를 개별 텍스트 요소로 나누어 주세요.');
@@ -115,6 +146,16 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts}) {
       }
       if(seen.has(nodeId)){at('INPUT_INVALID','중복 객체 ID입니다.');continue;}seen.add(nodeId);
       const style=plainStyle(st);
+      if(editable){
+        style.valign=st.alignContent==='center'?'mid':st.alignContent==='end'?'bottom':'top';
+        if(kind==='shape'){style.svgGeometry=el.dataset.geometry==='centerline';style.shape=st.borderTopLeftRadius==='50%'?'ellipse':'rect';}
+        if(kind==='line'){
+          const line=el.querySelector('svg > line');
+          if(!line||el.querySelectorAll('svg > *').length!==1){at('UNSUPPORTED_OBJECT','편집 선은 SVG line 한 개여야 합니다.');continue;}
+          const ls=getComputedStyle(line);Object.assign(style,{svgGeometry:true,stroke:ls.stroke,strokeWidth:parseFloat(ls.strokeWidth),endpoints:{start:{x:box.x+line.x1.baseVal.value,y:box.y+line.y1.baseVal.value},end:{x:box.x+line.x2.baseVal.value,y:box.y+line.y2.baseVal.value}}});
+          if(ls.strokeDasharray!=='none'||ls.markerStart!=='none'||ls.markerEnd!=='none')at('UNSUPPORTED_OBJECT','점선·화살표 선은 아직 지원하지 않습니다.');
+        }
+      }
       // A background-painted rule has rectangular filled ends. Retain that
       // paint primitive before authored JSON fields restore their semantic style.
       if(kind==='line'&&visibleColor(st.backgroundColor)&&st.backgroundImage==='none'&&['Top','Right','Bottom','Left'].every(side=>parseFloat(st[`border${side}Width`])===0)){
@@ -134,7 +175,7 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts}) {
       }
       const content=kind==='text'?{text,runs}:kind==='image'?{assetId:el.dataset.assetId??null}:{};
       if(isSvg)content.inlineSvg=new XMLSerializer().serializeToString(el);
-      nodes.push({id:nodeId,kind,boxCssPx:box,zOrder:order++,content,style,sourceRef,parentId:null});
+      nodes.push({id:nodeId,kind,boxCssPx:box,zOrder:order++,content,style,sourceRef,parentId:editable?(el.dataset.parentId??null):null});
       objects.push({nodeId,kind,boxCssPx:box,...(kind==='text'?lineMetrics(el):{})});
     }
     const layoutStable=JSON.stringify(initialLayout)===JSON.stringify(elements.map(boxOf));
@@ -169,7 +210,7 @@ export async function measureInput(input,runtime) {
     result.environment.viewport=session.page.viewportSize();
     let timer;
     const measured=await Promise.race([
-      session.page.evaluate(measurePage,{selector,profile:input.profile,timeoutMs:runtime.timeoutMs,sourceHadScripts:session.sourceHadScripts}),
+      session.page.evaluate(measurePage,{selector,profile:input.profile,timeoutMs:runtime.timeoutMs,sourceHadScripts:session.sourceHadScripts,nativeAliases:installedNativeAliases()}),
       new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('측정 제한 시간 초과')),Math.max(15000,runtime.timeoutMs));})
     ]).finally(()=>clearTimeout(timer));
     if(measured.layoutSnapshot){
@@ -182,6 +223,7 @@ export async function measureInput(input,runtime) {
     const availableNative=await session.page.evaluate(async names=>{const available=[];for(const name of names){try{await new FontFace('__native_probe',`local("${name}")`).load();available.push(name);}catch{}}return available;},[...new Set(mappings.map(m=>m.nativeLocalName))]);
     result.environment.fontMappings=mappings.filter(m=>availableNative.includes(m.nativeLocalName));
     result.model={version:1,sourceDigest:input.source.sha256,slides:measured.slides,assets:[...input.assets]};
+    if(input.profile==='editable-slides-v1')result.model.pptxSizeEmu=input.pptxSizeEmu;
     for(const slide of result.model.slides) {
       const source=input.project?.slides.find(s=>s.id===slide.id);
       for(const n of slide.nodes) {

@@ -2,6 +2,7 @@ import PptxGenJS from 'pptxgenjs';
 import {diagnostic,validateModel} from './model.mjs';
 import {assetDataUrl} from './assets.mjs';
 import {groupDiagnostics,applyFlatGroups} from './groups.mjs';
+import {canvasSize,EMU_PER_POINT} from './canvas.mjs';
 
 function paint(value,opacity=1){
   if(!value||value==='transparent')return {color:'FFFFFF',transparency:100};
@@ -48,10 +49,10 @@ export async function exportPptx(measured){
   }
   if(diagnostics.some(d=>d.severity==='error'))return failed();
   try{
-    const pptx=new PptxGenJS(),first=measured.model.slides[0],pointScale=960/Math.max(first.widthCssPx,first.heightCssPx),inchScale=pointScale/72;
+    const pptx=new PptxGenJS(),first=measured.model.slides[0],sizeEmu=canvasSize(measured.model),pointScale=sizeEmu.width/first.widthCssPx/EMU_PER_POINT,inchScale=pointScale/72;
     const emu=value=>Math.round(value*pointScale*12700),inches=value=>emu(value)/914400;
     profile.targetSizePt={width:first.widthCssPx*pointScale,height:first.heightCssPx*pointScale};profile.pointScale=pointScale;
-    pptx.defineLayout({name:'HTML_SLIDES',width:first.widthCssPx*inchScale,height:first.heightCssPx*inchScale});pptx.layout='HTML_SLIDES';
+    pptx.defineLayout({name:'HTML_SLIDES',width:sizeEmu.width/914400,height:sizeEmu.height/914400});pptx.layout='HTML_SLIDES';
     pptx.title='HTML 장표';pptx.author='HTML to editable PPTX';pptx.subject='Native text and shapes; visual validation is separate';pptx.lang='ko-KR';
     for(const [index,source] of measured.model.slides.entries()){
       if(source.widthCssPx!==first.widthCssPx||source.heightCssPx!==first.heightCssPx)throw new Error('Mixed slide sizes are unsupported');
@@ -74,17 +75,25 @@ export async function exportPptx(measured){
         if(node.kind==='shape'&&st.assetId)addBackground(st.assetId,box,node.id,node.sourceRef,st.opacity??1);
         if(node.kind==='text'){
           const runOptions=s=>({...resolveFont(s),fontSize:s.fontSize*pointScale,italic:s.fontStyle==='italic',color:paint(s.color,st.opacity).color,transparency:paint(s.color,st.opacity).transparency,charSpacing:s.letterSpacing&&s.letterSpacing!=='normal'?parseFloat(s.letterSpacing)*pointScale:0,underline:s.textDecoration?.includes('underline')?{style:'sng'}:undefined,breakLine:false});
-          const runs=(node.content.runs??[{text:node.content.text,style:st}]).map(r=>({text:r.text,options:runOptions(r.style)}));
+          const runs=(node.content.runs??[{text:node.content.text,style:st}]).map(r=>{
+            const options=runOptions(r.style),outline=r.style.outline;
+            if(outline){
+              const color=paint(outline.color,st.opacity??1);
+              if(color.transparency!==0||!Number.isFinite(outline.width)||outline.width<=0)throw new Error('불투명 단색 외의 글자 외곽선은 지원하지 않습니다.');
+              options.outline={color:color.color,size:outline.width*pointScale};
+            }
+            return {text:r.text,options};
+          });
           const padding=st.padding??{left:0,right:0,top:0,bottom:0};
           // Browser and Office advances can differ slightly in a tight auto-sized
           // label. Preserve a measured single line without enlarging its box or
           // shrinking type. Longer edits may overflow and need a fresh HTML export.
           const layout=measured.measurements.find(m=>m.slideId===source.id).objects.find(o=>o.nodeId===node.id);
-          slide.addText(runs,{...box,...runOptions(st),margin:[padding.left,padding.right,padding.bottom,padding.top].map(v=>v*pointScale),lineSpacing:st.lineHeight!=='normal'&&parseFloat(st.lineHeight)>0?parseFloat(st.lineHeight)*pointScale:undefined,paraSpaceBefore:0,paraSpaceAfter:0,align:st.align??'left',valign:'top',fit:'none',wrap:layout.lines.length!==1,isTextBox:true,lang:'ko-KR'});
+          slide.addText(runs,{...box,...runOptions(st),margin:[padding.top,padding.right,padding.bottom,padding.left].map(v=>v*pointScale),lineSpacing:st.lineHeight!=='normal'&&parseFloat(st.lineHeight)>0?parseFloat(st.lineHeight)*pointScale:undefined,paraSpaceBefore:0,paraSpaceAfter:0,align:st.align??'left',valign:st.valign??'top',fit:'none',wrap:layout.lines.length!==1,isTextBox:true,lang:'ko-KR'});
         }else if(node.kind==='shape'){
           const stroke=paint(st.stroke,(st.strokeWidth??0)>0?(st.opacity??1)*(st.strokeOpacity??1):0),half=st.svgGeometry||stroke.transparency===100?0:(st.strokeWidth??0)/2;
           if(b.w<=half*2||b.h<=half*2)throw new Error('Border is wider than the shape');
-          slide.addShape(st.shape==='ellipse'?pptx.ShapeType.ellipse:st.radius>0?pptx.ShapeType.roundRect:pptx.ShapeType.rect,{...box,x:inches(b.x+half),y:inches(b.y+half),w:inches(b.w-2*half),h:inches(b.h-2*half),rectRadius:Math.max(0,(st.radius??0)-half)*inchScale,fill:paint(st.assetId?'transparent':st.fill,(st.opacity??1)*(st.fillOpacity??1)),line:{...stroke,width:(st.strokeWidth??0)*pointScale,dashType:st.dash||st.borderStyle==='dashed'?'dash':st.borderStyle==='dotted'?'sysDot':'solid'}});
+          slide.addShape(st.shape==='ellipse'?pptx.ShapeType.ellipse:st.radius>0?pptx.ShapeType.roundRect:pptx.ShapeType.rect,{...box,x:inches(b.x+half),y:inches(b.y+half),w:inches(b.w-2*half),h:inches(b.h-2*half),rectRadius:st.shape==='ellipse'?undefined:Math.max(0,(st.radius??0)-half)*inchScale,fill:paint(st.assetId?'transparent':st.fill,(st.opacity??1)*(st.fillOpacity??1)),line:{...stroke,width:(st.strokeWidth??0)*pointScale,dashType:st.dash||st.borderStyle==='dashed'?'dash':st.borderStyle==='dotted'?'sysDot':'solid'}});
         }else if(node.kind==='line'){
           const horizontal=b.w>=b.h,t=st.strokeWidth||Math.min(b.w,b.h)||1;
           if(st.svgGeometry&&st.endpoints){
