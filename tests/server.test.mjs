@@ -1,12 +1,14 @@
 import test,{before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import PptxGenJS from 'pptxgenjs';
 import {createHtmlServer} from '../src/html-to-pptx/server.mjs';
 import {inspectPptxIndependently} from './inspect-pptx.mjs';
-let app;
-before(async()=>{app=await createHtmlServer({port:0});});
+let app,cookie,csrf;
+before(async()=>{app=await createHtmlServer({port:0});const r=await fetch(app.url+'/api/session');cookie=r.headers.get('set-cookie').split(';')[0];csrf=(await r.json()).csrfToken;});
 after(async()=>{await app?.close();});
-const post=(route,body,headers={})=>fetch(app.url+route,{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)});
+const request=(route,options={})=>fetch(app.url+route,{...options,headers:{cookie,...options.headers}});
+const post=(route,body,headers={})=>request(route,{method:'POST',headers:{'content-type':'application/json','x-csrf-token':csrf,...headers},body:JSON.stringify(body)});
 
 for(const example of [
   {file:'wide.html',slides:2,texts:2,ratio:16/9,title:'Current review',html:'<section data-slide style="width:960px;height:540px"><p style="font:24px Arial">Current review</p></section><section data-slide style="width:960px;height:540px"><p style="font:24px Arial">Next steps</p></section>'},
@@ -15,15 +17,31 @@ for(const example of [
 ])test(`${example.file}: analyze, download and inspect editable output`,async()=>{
   const response=await post('/api/analyze',{html:example.html,fileName:example.file});
   const job=await response.json();assert.equal(response.status,200,JSON.stringify(job));assert.equal(job.slideCount,example.slides);
-  const preview=await fetch(app.url+job.slides[0].previewUrl);assert.equal(preview.status,200);assert.equal(preview.headers.get('content-type'),'image/png');
+  assert.equal(job.sourceType,'html');assert.equal(job.targetType,'pptx');
+  const preview=await request(job.slides[0].previewUrl);assert.equal(preview.status,200);assert.equal(preview.headers.get('content-type'),'image/png');
   const output=await post('/api/export',{jobId:job.id}),result=await output.json();assert.equal(output.status,200,JSON.stringify(result));
   assert.equal(result.objectMapUrl,null);assert.equal(result.visualQuality,'unmeasured');
-  const download=await fetch(app.url+result.downloadUrl);assert.equal(download.status,200);
+  const download=await request(result.downloadUrl);assert.equal(download.status,200);
   const bytes=new Uint8Array(await download.arrayBuffer()),ppt=await inspectPptxIndependently(bytes);
   assert.equal(ppt.slides.length,example.slides);assert.equal(ppt.nativeTextCount,example.texts);assert.equal(ppt.fullSlideRasterReplacementCount,0);
   assert.ok(Math.abs(ppt.widthEmu/ppt.heightEmu-example.ratio)<0.00001);
   assert.ok(ppt.slides.flatMap(s=>s.objects).some(o=>o.kind==='text'&&o.text===example.title));
   assert.equal((await fetch(app.url+`/api/jobs/${job.id}/object-map`)).status,404);
+});
+
+test('PPT input downloads current content as HTML through the same session',async()=>{
+  const pptx=new PptxGenJS();pptx.layout='LAYOUT_WIDE';const slide=pptx.addSlide();slide.background={color:'FFFFFF'};
+  slide.addText('Current report 0',{x:1,y:1,w:6,h:1,fontFace:'Arial',fontSize:24,margin:0,objectName:'heading'});
+  const bytes=new Uint8Array(await pptx.write({outputType:'uint8array'}));
+  const response=await post('/api/analyze',{sourceType:'pptx',pptxBase64:Buffer.from(bytes).toString('base64'),fileName:'report.pptx'}),job=await response.json();
+  assert.equal(response.status,200,JSON.stringify(job));assert.equal(job.sourceType,'pptx');assert.equal(job.targetType,'html');assert.equal(job.slideCount,1);
+  assert.equal((await request(job.slides[0].previewUrl)).status,200);
+  assert.equal((await post('/api/export',{jobId:job.id,target:'pptx'})).status,400);
+  const converted=await post('/api/export',{jobId:job.id,target:'html'}),result=await converted.json();assert.equal(converted.status,200,JSON.stringify(result));
+  assert.equal(result.downloadFileName,'report.html');assert.equal(result.objectMapUrl,null);assert.equal(result.visualQuality,'unmeasured');
+  const download=await request(result.downloadUrl);assert.equal(download.status,200);assert.match(download.headers.get('content-type'),/^text\/html/);assert.match(download.headers.get('content-disposition'),/^attachment; filename="slides\.html";/);
+  const html=await download.text();assert.ok(html.includes('Current report 0'));assert.match(html,/script-src 'none'/);
+  assert.equal((await fetch(app.url+result.downloadUrl)).status,404);
 });
 
 test('private files, reports and path traversal are unavailable',async()=>{
@@ -39,7 +57,8 @@ test('rejects wrong host, foreign origin and malformed requests',async()=>{
     request.on('error',reject);request.end('{}');
   });
   assert.equal(wrongHost,403);
-  assert.equal((await fetch(app.url+'/api/analyze',{method:'POST',body:'invalid'})).status,400);
+  assert.equal((await request('/api/analyze',{method:'POST',headers:{'x-csrf-token':csrf},body:'invalid'})).status,400);
+  assert.equal((await post('/api/analyze',{sourceType:'pptx',pptxBase64:Buffer.from('not a presentation').toString('base64')})).status,400);
   assert.equal((await post('/api/export',{jobId:'unknown'})).status,404);
   assert.equal((await fetch(app.url+'/api/jobs/0000/preview/1.png')).status,404);
   await assert.rejects(createHtmlServer({host:'0.0.0.0'}),/루프백/);

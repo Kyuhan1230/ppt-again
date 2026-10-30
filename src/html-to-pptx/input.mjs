@@ -2,16 +2,19 @@ import {parse} from 'parse5';
 import * as cssTree from 'css-tree';
 import {assetPath, resolveAsset, sha256} from './assets.mjs';
 import {diagnostic} from './model.mjs';
+import {readChartDeclarations} from './chart-input.mjs';
+import {chartText} from './charts.mjs';
+import {readEmbeddedSlideData} from './embedded-slide-data.mjs';
 
 export const attribute = (node, name) => node.attrs?.find(a => a.name === name)?.value;
 export function* walkHtml(node) { yield node; for (const child of node.childNodes ?? []) yield* walkHtml(child); }
 const nodeText = node => (node.childNodes ?? []).filter(n=>n.nodeName==='#text').map(n=>n.value).join('');
 const location = node => ({sourceRef:{path:`${node.tagName ?? node.nodeName}@${node.sourceCodeLocation?.startOffset ?? 0}`}});
 
-export async function readInput({html, assets: provided = [], slideSelector = null} = {}) {
+export async function readInput({html, assets: provided = [], slideSelector = null} = {},{allowEmbedded=true}={}) {
   const original = typeof html === 'string' ? html : '';
   const input = {schemaVersion:1,profile:'static-slides-v1',source:{html:original,sha256:sha256(original),slideSelector},
-    assets:[],project:null,diagnostics:[],styles:[],fontFaces:[],assetRefs:[]};
+    assets:[],project:null,diagnostics:[],styles:[],fontFaces:[],assetRefs:[],charts:[]};
   const fail = (code,message,loc,severity) => input.diagnostics.push(diagnostic(code,message,loc,severity));
   if (!original.trim() || Buffer.byteLength(original)>16*1024*1024) { fail('INPUT_INVALID','HTML 문자열이 없거나 16MiB를 초과합니다.'); return input; }
   if (slideSelector !== null && (typeof slideSelector!=='string'||!slideSelector.trim())) fail('INPUT_INVALID','장표 선택자는 비어 있지 않은 문자열이어야 합니다.');
@@ -26,6 +29,20 @@ export async function readInput({html, assets: provided = [], slideSelector = nu
   }
   if(total>64*1024*1024) { fail('INPUT_INVALID','제공 자산의 총 크기가 64MiB를 초과합니다.'); return input; }
   if(input.diagnostics.some(d=>d.severity==='error'))return input;
+  const tree = parse(original,{sourceCodeLocationInfo:true}),nodes=[...walkHtml(tree)];
+  if(allowEmbedded&&!slideSelector&&!nodes.some(n=>attribute(n,'data-slide')!==undefined||attribute(n,'data-slidehandoff')!==undefined)){
+    const embedded=readEmbeddedSlideData(tree);
+    if(embedded.matched){
+      input.embeddedSlides=[];input.diagnostics.push(...embedded.diagnostics);const sharedAssets=new Map(),faces=new Map();
+      for(const [index,document] of embedded.documents.entries()){
+        const child=await readInput({html:document.html,assets:[...provided,...document.assets]},{allowEmbedded:false});
+        child.assets=child.assets.map(asset=>{if(!sharedAssets.has(asset.id))sharedAssets.set(asset.id,asset);return sharedAssets.get(asset.id);});
+        for(const face of child.fontFaces){const key=JSON.stringify([face.family,face.weight,face.style,face.assetIds,face.unicodeRange]);if(!faces.has(key))faces.set(key,face);}
+        input.diagnostics.push(...child.diagnostics.map(d=>({...d,slideId:`slide-${index+1}`,sourceRef:{...d.sourceRef,path:`embedded.pages[${index}].${d.sourceRef?.path??''}`}})));input.embeddedSlides.push(child);
+      }
+      input.assets=[...sharedAssets.values()];input.fontFaces=[...faces.values()];return input;
+    }
+  }
   const byId = new Map();
   const addAsset = (url,loc,usage='image',basePath=null) => {
     try {
@@ -42,19 +59,33 @@ export async function readInput({html, assets: provided = [], slideSelector = nu
       cssTree.walk(ast,function(n){
         if(n.type==='Atrule'&&n.name.toLowerCase()==='import')fail('UNSUPPORTED_OBJECT','CSS @import는 제공된 단일 스타일시트로 합쳐 주세요.',loc);
         if(n.type==='Atrule'&&n.name.toLowerCase()==='font-face') {
-          const declarations={};n.block?.children.forEach(d=>{if(d.type==='Declaration')declarations[d.property]=cssTree.generate(d.value);});
-          input.fontFaces.push({family:(declarations['font-family']??'').replace(/^["']|["']$/g,''),weight:declarations['font-weight']??'normal',style:declarations['font-style']??'normal',css:cssTree.generate(n),...loc});
+          const declarations={},assetIds=[];let hasLocal=false;
+          n.block?.children.forEach(d=>{if(d.type==='Declaration')declarations[d.property.toLowerCase()]=cssTree.generate(d.value);});
+          cssTree.walk(n,child=>{
+            if(child.type==='Function'&&child.name.toLowerCase()==='local')hasLocal=true;
+            if(child.type==='Url'){const asset=addAsset(child.value,loc,'font',basePath);if(asset&&!assetIds.includes(asset.id))assetIds.push(asset.id);}
+          });
+          input.fontFaces.push({family:(declarations['font-family']??'').replace(/^["']|["']$/g,''),weight:declarations['font-weight']??'normal',style:declarations['font-style']??'normal',
+            unicodeRange:declarations['unicode-range']??null,stretch:declarations['font-stretch']??'normal',hasLocal,assetIds,
+            adjusted:['size-adjust','ascent-override','descent-override','line-gap-override'].some(key=>key in declarations),css:cssTree.generate(n),...loc});
+          return this.skip;
         }
         if(n.type==='Url'&&!n.value.startsWith('#')) addAsset(n.value,loc,this.atrule?.name.toLowerCase()==='font-face'?'font':'image',basePath);
       });
     }catch(e){fail('INPUT_INVALID',`CSS를 해석할 수 없습니다: ${e.message}`,loc);}
   };
-  const tree = parse(original,{sourceCodeLocationInfo:true});
-  const nodes=[...walkHtml(tree)];
+  const chartInput=readChartDeclarations(tree);input.charts=chartInput.charts;input.diagnostics.push(...chartInput.diagnostics);
+  const insideChart=node=>{for(let p=node.parentNode;p;p=p.parentNode)if(p.tagName==='figure'&&attribute(p,'data-chart-id')!==undefined)return true;return false;};
+  if(input.charts.length){
+    let characters=input.charts.flatMap(c=>chartText(c.content)).reduce((sum,text)=>sum+text.length,0);
+    for(const node of nodes)if(node.nodeName==='#text'&&!['script','style'].includes(node.parentNode?.tagName)&&!insideChart(node))characters+=node.value.length;
+    if(characters>2000000)fail('LIMIT_EXCEEDED','차트와 본문의 전체 문구가 2,000,000자를 초과합니다.');
+  }
   const generated=nodes.find(n=>n.tagName==='html'&&attribute(n,'data-slidehandoff')!==undefined);
   if(generated){
-    if(attribute(generated,'data-slidehandoff')!=='1')fail('INPUT_INVALID','지원하지 않는 Slidehandoff HTML 버전입니다.');
-    else input.profile='editable-slides-v1';
+    const version=attribute(generated,'data-slidehandoff');
+    if(!['1','2'].includes(version))fail('INPUT_INVALID','지원하지 않는 Slidehandoff HTML 버전입니다.');
+    else input.profile=`editable-slides-v${version}`;
     const roots=nodes.filter(n=>attribute(n,'data-slide')!==undefined);
     if(!roots.length||roots.length>200)fail('INPUT_INVALID','장표는 1~200장이어야 합니다.');
     input.pptxSizeEmu={width:Number(attribute(roots[0]??{},'data-ppt-width-emu')),height:Number(attribute(roots[0]??{},'data-ppt-height-emu'))};
@@ -62,6 +93,7 @@ export async function readInput({html, assets: provided = [], slideSelector = nu
   }
   const dataNodes=nodes.filter(n=>n.tagName==='script'&&attribute(n,'id')==='project-data');
   if(dataNodes.length) {
+    if(input.charts.length){fail('UNSUPPORTED_OBJECT','project-data 안의 차트 선언은 아직 지원하지 않습니다.');return input;}
     if(generated){fail('INPUT_INVALID','현재 HTML과 project-data를 동시에 입력할 수 없습니다.');return input;}
     input.profile='project-data-v1';
     if(dataNodes.length!==1)fail('INPUT_INVALID','project-data 스크립트는 한 개여야 합니다.',location(dataNodes[0]));
@@ -74,7 +106,7 @@ export async function readInput({html, assets: provided = [], slideSelector = nu
   // Keep explicit HTML roots authoritative; small toolbar icons are not slides.
   if(input.profile==='static-slides-v1'&&!slideSelector&&!nodes.some(n=>attribute(n,'data-slide')!==undefined)) {
     const roots=nodes.filter(n=>{
-      if(n.tagName!=='svg')return false;
+      if(n.tagName!=='svg'||insideChart(n))return false;
       for(let p=n.parentNode;p;p=p.parentNode)if(p.tagName==='svg')return false;
       const v=(attribute(n,'viewBox')??'').trim().split(/[ ,]+/).map(Number);
       return v.length===4&&v.every(Number.isFinite)&&v[2]>=300&&v[3]>=200;
@@ -82,6 +114,7 @@ export async function readInput({html, assets: provided = [], slideSelector = nu
     if(roots.length){input.profile='svg-slides-v1';input.svgRootPaths=roots.map(n=>location(n).sourceRef.path);}
   }
   for(const n of nodes) {
+    if(insideChart(n))continue; // The chart display is regenerated from its JSON, never reused.
     if(n.tagName==='style')scanCss(nodeText(n),location(n));
     if(n.tagName==='link'&&attribute(n,'rel')?.toLowerCase().split(/\s+/).includes('stylesheet')) {
       const a=addAsset(attribute(n,'href'),location(n),'stylesheet');if(a)scanCss(Buffer.from(a.bytes).toString('utf8'),location(n),a.path);

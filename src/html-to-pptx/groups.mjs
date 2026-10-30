@@ -14,8 +14,13 @@ export function groupDiagnostics(slide){
 export function applyFlatGroups(bytes,model,objectMap,pointScale){
   const parts=unzipSync(bytes),serializer=new XMLSerializer();
   for(const [i,slide] of model.slides.entries()){
-    const groups=slide.nodes.filter(n=>n.kind==='group'),bars=slide.nodes.filter(n=>n.kind==='line'&&n.style.linePaint?.kind==='bar');if(!groups.length&&!bars.length)continue;
+    const groups=slide.nodes.filter(n=>n.kind==='group'),bars=slide.nodes.filter(n=>n.kind==='line'&&n.style.linePaint?.kind==='bar'),tables=slide.nodes.filter(n=>n.kind==='table');if(!groups.length&&!bars.length&&!tables.length)continue;
     const file=`ppt/slides/slide${i+1}.xml`,doc=new DOMParser().parseFromString(strFromU8(parts[file]),'application/xml'),tree=all(doc,'spTree')[0];
+    // PptxGenJS numbers tables separately, which can collide with ordinary shapes.
+    for(const table of tables){
+      const entry=objectMap.find(e=>e.pptSlideNumber===i+1&&e.sourceNodeId===table.id),nv=all(doc,'cNvPr').find(n=>n.getAttribute('name')===table.id&&n.parentNode.localName==='nvGraphicFramePr');
+      if(!entry||!nv)throw new Error('Table output correspondence missing');nv.setAttribute('id',String(entry.pptObjectId));
+    }
     let nextId=Math.max(...all(doc,'cNvPr').map(n=>Number(n.getAttribute('id'))))+1;
     const create=(ns,name,attrs={})=>{const e=doc.createElementNS(ns,name);for(const [k,v] of Object.entries(attrs))e.setAttribute(k,String(v));return e;};
     // Office paints thin filled bars differently when a transparent stroke is

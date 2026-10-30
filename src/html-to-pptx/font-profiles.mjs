@@ -17,6 +17,10 @@ export function identifyFontMappings(input){
   for(const face of input.fontFaces??[]){
     const asset=input.assetRefs.filter(r=>r.usage==='font'&&face.css.includes(r.url)).map(r=>input.assets.find(a=>a.id===r.assetId)).find(Boolean);
     const profile=profiles.find(p=>p.webSha256===asset?.sha256);if(!profile)continue;
+    // One alias must resolve to the same verified bytes throughout this document.
+    // Other same-family declarations or local() alternatives can select a different face.
+    const familyFaces=input.fontFaces.filter(f=>f.family.toLowerCase()===face.family.toLowerCase());
+    if(familyFaces.some(f=>f.hasLocal||!f.assetIds?.length||f.assetIds.some(id=>input.assets.find(a=>a.id===id)?.sha256!==asset.sha256)))continue;
     for(const [weight,native] of Object.entries(profile.faces)){
       const file=directories.map(d=>path.join(d,native.file)).find(f=>fs.existsSync(f)&&sha256(fs.readFileSync(f))===native.sha256);if(!file)continue;
       if(result.some(m=>m.sourceFamily===face.family&&m.sourceWeight===Number(weight)))continue;

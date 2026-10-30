@@ -3,10 +3,10 @@ import * as cssTree from 'css-tree';
 import {attribute, walkHtml} from './input.mjs';
 import {assetDataUrl} from './assets.mjs';
 const esc = v => String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-export function renderInput(input) {
+export function renderInput(input,{fontAssetUrl=null}={}) {
   const assets=new Map(input.assets.map(a=>[a.id,a]));
   const rewriteCss=(css,basePath=null)=>{
-    try { const ast=cssTree.parse(css);cssTree.walk(ast,n=>{if(n.type==='Url'&&!n.value.startsWith('#')){const ref=input.assetRefs.find(r=>r.url===n.value&&r.basePath===basePath);n.value=ref?assetDataUrl(assets.get(ref.assetId)):'data:,';}});return cssTree.generate(ast); }
+    try { const ast=cssTree.parse(css);cssTree.walk(ast,n=>{if(n.type==='Url'&&!n.value.startsWith('#')){const ref=input.assetRefs.find(r=>r.url===n.value&&r.basePath===basePath),asset=ref&&assets.get(ref.assetId);n.value=asset?(ref.usage==='font'&&fontAssetUrl?fontAssetUrl(asset):null)??assetDataUrl(asset):'data:,';}});return cssTree.generate(ast); }
     catch { return ''; }
   };
   if(input.profile==='project-data-v1'&&input.project) {
@@ -39,6 +39,7 @@ export function renderInput(input) {
       continue;
     }
     const inline=attribute(node,'style');if(inline){const rewritten=rewriteCss(`x{${inline}}`);add('style',rewritten.slice(2,-1));}
+    if(node.tagName==='figure'&&(input.charts??[]).some(c=>c.id===attribute(node,'data-chart-id')))node.childNodes=[];
     if(node.tagName==='img') {
       const ref=input.assetRefs.find(r=>r.sourceRef?.path===sourcePath&&r.usage==='image');
       add('src',ref?assetDataUrl(assets.get(ref.assetId)):'data:,');

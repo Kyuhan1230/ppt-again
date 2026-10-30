@@ -17,11 +17,11 @@ tests/            메모리에서 만든 가상 입력·다운로드·접근 차
 docs/             사용 범위와 설계 이유
 ```
 
-처리 순서는 `readInput → measureInput → exportPptx`입니다. 입력 JavaScript를 실행하지 않고, 격리된 브라우저에서 측정한 위치와 서식을 PPT 객체로 옮깁니다. 서버는 파일 선택부터 다운로드까지 연결합니다.
+HTML 처리 순서는 `readInput → measureInput → exportPptx`입니다. 입력 JavaScript를 실행하지 않고, 격리된 브라우저에서 측정한 위치와 서식을 PPT 객체로 옮깁니다. 반대 방향은 `readPptx → exportHtml`이며, 미리보기 측정값으로 원래 PPT의 현재 값을 바꾸지 않습니다. 서버는 세션별 접근 확인과 작업별 프로세스 안에서 두 흐름을 실행합니다.
 
 ## PPT에서 HTML로
 
-다음은 Node.js에서 사용하는 기본 모듈입니다. 입력과 출력 경로는 개인 폴더로 정하고 원본을 덮어쓰지 마세요. 이 경로는 아직 앱의 파일 선택 화면에 연결하지 않았습니다.
+앱에서 PPTX를 선택하면 HTML로 내려받을 수 있습니다. 다음은 같은 변환을 Node.js 모듈로 실행하는 방법입니다. 입력과 출력 경로는 개인 폴더로 정하고 원본을 덮어쓰지 마세요.
 
 ```js
 import fs from 'node:fs/promises';
