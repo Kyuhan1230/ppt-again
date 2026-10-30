@@ -5,7 +5,9 @@
   "license": "UNLICENSED",
   "type": "module",
   "description": "Convert slide HTML into editable PowerPoint files for review and handoff.",
-  "engines": {"node": ">=24 <25"},
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "start": "node src/html-to-pptx/server.mjs",
     "test": "node --test tests/*.test.mjs"
@@ -19,5 +21,10 @@
     "pptxgenjs": "4.0.1",
     "wawoff2": "2.0.1"
   },
-  "overrides": {"image-size": "2.0.4"}
+  "overrides": {
+    "image-size": "2.0.4"
+  },
+  "bin": {
+    "slidehandoff": "src/html-to-pptx/cli.mjs"
+  }
 }

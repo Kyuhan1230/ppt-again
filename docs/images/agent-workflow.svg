@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="490" viewBox="0 0 1200 490" role="img" aria-labelledby="title description">
+  <title id="title">사용자와 AI 에이전트의 PPT 수정 흐름</title>
+  <desc id="description">사용자가 PPT와 수정 요청을 전달하면 AI 에이전트가 PPT를 HTML로 변환해 수정하고 PPT로 다시 변환해 전달합니다. 사용자는 결과를 확인하고 다시 수정 요청할 수 있습니다.</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#3572c6"/></marker></defs>
+  <rect width="1200" height="490" rx="20" fill="#f5f8fc"/>
+  <text x="55" y="62" fill="#172c47" font-family="Malgun Gothic, Apple SD Gothic Neo, sans-serif" font-size="26" font-weight="700">PPT를 AI와 주고받으며 수정하기</text>
+  <text x="55" y="94" fill="#586a7c" font-family="Malgun Gothic, Apple SD Gothic Neo, sans-serif" font-size="16">Slidehandoff가 파일 변환을 맡고, AI 에이전트가 HTML을 수정합니다.</text>
+  <g font-family="Malgun Gothic, Apple SD Gothic Neo, sans-serif">
+    <rect x="45" y="137" width="210" height="190" rx="15" fill="#fff" stroke="#d6e1ed"/>
+    <rect x="289" y="137" width="210" height="190" rx="15" fill="#fff" stroke="#d6e1ed"/>
+    <rect x="533" y="137" width="210" height="190" rx="15" fill="#eaf2ff" stroke="#a9c7ed"/>
+    <rect x="777" y="137" width="210" height="190" rx="15" fill="#fff" stroke="#d6e1ed"/>
+    <rect x="1021" y="137" width="135" height="190" rx="15" fill="#fff" stroke="#d6e1ed"/>
+    <g fill="#3572c6" font-size="14" font-weight="700"><text x="67" y="171">사용자</text><text x="311" y="171">SLIDEHANDOFF</text><text x="555" y="171">AI 에이전트</text><text x="799" y="171">SLIDEHANDOFF</text><text x="1043" y="171">사용자</text></g>
+    <g fill="#172c47" font-size="22" font-weight="700"><text x="67" y="215">PPT 전달</text><text x="311" y="215">PPT → HTML</text><text x="555" y="215">HTML 수정</text><text x="799" y="215">HTML → PPT</text><text x="1043" y="215">확인</text></g>
+    <g fill="#586a7c" font-size="15"><text x="67" y="251">파일과 수정 요청</text><text x="311" y="251">장표를 변환</text><text x="555" y="251">요청한 내용 반영</text><text x="799" y="251">편집 가능한 파일 생성</text><text x="1043" y="251">PPT를 열어</text><text x="1043" y="275">이어 편집</text></g>
+    <g fill="none" stroke="#3572c6" stroke-width="2.5" marker-end="url(#arrow)"><path d="M260 230h23"/><path d="M504 230h23"/><path d="M748 230h23"/><path d="M992 230h23"/></g>
+    <path d="M1087 343 V386 Q1087 402 1071 402 H150 Q134 402 134 386 V352" fill="none" stroke="#3572c6" stroke-width="2.5" marker-end="url(#arrow)"/>
+    <rect x="436" y="386" width="325" height="33" rx="16" fill="#f5f8fc"/>
+    <text x="598" y="408" text-anchor="middle" fill="#3572c6" font-size="16" font-weight="700">필요하면 다시 수정 요청</text>
+    <text x="600" y="457" text-anchor="middle" fill="#66798c" font-size="14">지원 범위 안의 PPT에 적용됩니다. 결과의 글꼴과 배치를 확인해 주세요.</text>
+  </g>
+</svg>
