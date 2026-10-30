@@ -25,6 +25,6 @@
 
 ## 문제 제보
 
-보안 문제는 [비공개 취약점 제보](https://github.com/Kyuhan1230/slidehandoff/security/advisories/new)를 이용해 주세요. 공개 이슈에 회사 자료, 토큰, 원문 장표를 올리지 마세요. 버전, 발생 조건과 민감 내용을 제거한 최소 예제로 설명해 주세요.
+보안 문제는 [비공개 취약점 제보](https://github.com/Kyuhan1230/ppt-again/security/advisories/new)를 이용해 주세요. 공개 이슈에 회사 자료, 토큰, 원문 장표를 올리지 마세요. 버전, 발생 조건과 민감 내용을 제거한 최소 예제로 설명해 주세요.
 
 공식 응답 기한이나 보안 지원 기간은 아직 정하지 않았습니다.

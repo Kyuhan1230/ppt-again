@@ -4,7 +4,9 @@
 
 AI에게 수정을 맡기고, 결과는 다시 PPT로 받으세요.
 
-기존 PPT를 HTML로 바꿔 AI 에이전트와 함께 수정하고, 다시 PowerPoint에서 편집할 수 있는 PPT로 만드세요. HTML로 만든 발표자료도 PPT로 변환해 보고·발표·제출에 활용할 수 있습니다.
+기존 PPT를 HTML로 바꿔 AI 에이전트와 함께 수정하고, 다시 PowerPoint에서 편집할 수 있는 PPT로 만드세요.
+
+AI로 HTML 발표자료를 만들었는데 회사 보고나 제출에는 PPT가 필요할 때도 있습니다. HTML에서 만든 장표를 PPT로 가져와 PowerPoint에서 이어서 다듬으세요.
 
 **파일 변환 자체에는 AI 토큰이나 API 키가 필요하지 않습니다.** 변환은 내 컴퓨터에서 실행하고, 내용 수정에는 평소 쓰는 AI 에이전트를 사용할 수 있습니다. 에이전트가 자료를 읽고 수정할 때의 토큰과 비용은 사용하는 서비스에 따라 발생합니다.
 
@@ -34,8 +36,8 @@ HTML은 AI가 내용을 읽고 수정하기 좋은 작업 공간입니다. PPT, 
 Windows, Node.js 24, Microsoft Edge가 필요합니다. PowerPoint는 내려받은 파일을 확인하고 수정할 때 사용합니다.
 
 ```sh
-git clone https://github.com/Kyuhan1230/slidehandoff.git
-cd slidehandoff
+git clone https://github.com/Kyuhan1230/ppt-again.git
+cd ppt-again
 npm ci
 npm start
 ```
