@@ -11,20 +11,20 @@ const help=`Usage: slidehandoff convert <input.html|input.pptx> --output <output
 const fail=(code,message,exit=1)=>Object.assign(new Error(message),{code,exit});
 async function readFileLimited(file,max){
   const handle=await fs.open(file,'r');
-  try{const stat=await handle.stat();if(!stat.isFile()||stat.size>max)throw fail('INPUT_LIMIT','입력 파일의 크기 또는 형식을 확인해 주세요.');const bytes=await handle.readFile();if(bytes.length>max)throw fail('INPUT_LIMIT','입력 파일이 너무 큽니다.');return bytes;}finally{await handle.close();}
+  try{const stat=await handle.stat();if(!stat.isFile()||stat.size>max)throw fail('INPUT_LIMIT','입력 파일의 크기 또는 형식을 확인해 주세요.');const chunks=[];let total=0;while(true){const chunk=Buffer.allocUnsafe(Math.min(65536,max+1-total));const {bytesRead}=await handle.read(chunk,0,chunk.length,null);if(!bytesRead)break;total+=bytesRead;if(total>max)throw fail('INPUT_LIMIT','입력 파일이 너무 큽니다.');chunks.push(chunk.subarray(0,bytesRead));}return Buffer.concat(chunks,total);}finally{await handle.close();}
 }
 async function readAssets(dir){
   const root=await fs.realpath(dir),rootStat=await fs.lstat(dir);if(rootStat.isSymbolicLink()||!rootStat.isDirectory())throw fail('ASSET_INVALID','자산 폴더를 확인해 주세요.');
-  const assets=[],names=new Set();let total=0;
+  const assets=[],names=new Set();let total=0,entryCount=0;
   async function visit(folder,relative=''){
-    const entries=await fs.readdir(folder,{withFileTypes:true});entries.sort((a,b)=>a.name.localeCompare(b.name));
+    const entries=[];for await(const entry of await fs.opendir(folder)){if(++entryCount>1024)throw fail('ASSET_LIMIT','자산 폴더는 최대 1024개 항목까지 사용할 수 있습니다.');entries.push(entry);}entries.sort((a,b)=>a.name.localeCompare(b.name));
     for(const entry of entries){
       const rel=relative?`${relative}/${entry.name}`:entry.name;const normalized=assetPath(rel);if(normalized!==rel||names.has(normalized))throw fail('ASSET_INVALID','자산 경로가 올바르지 않습니다.');names.add(normalized);
       const file=path.join(folder,entry.name),stat=await fs.lstat(file);if(stat.isSymbolicLink())throw fail('ASSET_INVALID','자산의 심볼릭 링크는 사용할 수 없습니다.');
       const real=await fs.realpath(file),inside=path.relative(root,real);if(inside.startsWith('..'+path.sep)||inside==='..'||path.isAbsolute(inside))throw fail('ASSET_INVALID','자산 경로가 폴더를 벗어났습니다.');
       if(stat.isDirectory()){await visit(file,rel);continue;}
       if(!stat.isFile()||stat.size>16*MiB||(total+=stat.size)>64*MiB)throw fail('ASSET_INVALID','자산 형식 또는 크기를 확인해 주세요.');
-      const bytes=await readFileLimited(file,16*MiB);assets.push({path:rel,bytes});
+      const bytes=await readFileLimited(file,16*MiB);total+=bytes.length-stat.size;if(total>64*MiB)throw fail('ASSET_LIMIT','자산의 총 크기가 64MiB를 초과합니다.');assets.push({path:rel,bytes});
     }
   }
   await visit(root);return assets;

@@ -2,7 +2,7 @@
   "name": "slidehandoff",
   "version": "0.1.0-preview.1",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "description": "Convert slide HTML into editable PowerPoint files for review and handoff.",
   "engines": {

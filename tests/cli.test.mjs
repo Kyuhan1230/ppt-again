@@ -31,3 +31,9 @@ test('assets are loaded from the specified directory and missing assets fail',as
  let result=run('convert',input,'--output',output,'--assets',assets,'--json');assert.equal(result.status,0,result.stdout||result.stderr);assert.ok(Object.keys(unzipSync(await fs.readFile(output))).some(name=>name.startsWith('ppt/media/')));
  await fs.unlink(output);await fs.unlink(path.join(assets,'image.png'));result=run('convert',input,'--output',output,'--assets',assets,'--json');assert.equal(result.status,1);assert.equal(JSON.parse(result.stdout).status,'failed');await assert.rejects(fs.access(output));
 });
+test('asset directories with too many entries are rejected before conversion',async t=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'slidehandoff-cli-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));
+ const input=path.join(dir,'input.html'),output=path.join(dir,'out.pptx'),assets=path.join(dir,'assets');await fs.mkdir(assets);await fs.writeFile(input,source);
+ for(let i=0;i<1025;i++)await fs.writeFile(path.join(assets,`${i}.txt`),'');
+ const result=run('convert',input,'--output',output,'--assets',assets,'--json');assert.equal(result.status,1);assert.equal(JSON.parse(result.stdout).code,'ASSET_LIMIT');await assert.rejects(fs.access(output));
+});
