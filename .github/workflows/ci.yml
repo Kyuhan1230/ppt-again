@@ -23,7 +23,9 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - run: npm test
+      # Each file launches browsers and worker observers; parallel files can
+      # exhaust a hosted runner and trip the application's resource watchdog.
+      - run: node --test --test-concurrency=1 tests/*.test.mjs
       - name: Package verified source
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: git archive --format=zip --output=ppt-again-source.zip HEAD
