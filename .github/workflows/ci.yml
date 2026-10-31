@@ -1,0 +1,37 @@
+name: Windows verification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Package verified source
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: git archive --format=zip --output=ppt-again-source.zip HEAD
+      - name: Save verified source package
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ppt-again-source
+          path: ppt-again-source.zip
+          retention-days: 14
+          if-no-files-found: error
