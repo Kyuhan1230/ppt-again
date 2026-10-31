@@ -66,13 +66,13 @@ npm start
 
 ## 명령어로 변환하기
 
-위의 `npm ci`를 실행한 뒤 터미널이나 AI 에이전트에서 실행합니다. 명령어 이름은 `slidehandoff`입니다. 변환을 위해 서버를 실행하거나 별도의 AI API 키를 설정할 필요는 없습니다. HTML 수정은 사용하는 AI 에이전트가 수행합니다.
+위의 `npm ci`를 실행한 뒤 터미널이나 AI 에이전트에서 실행합니다. 명령어 이름은 `ppt-again`입니다. 기존 `slidehandoff` 명령어도 계속 사용할 수 있습니다. 변환을 위해 서버를 실행하거나 별도의 AI API 키를 설정할 필요는 없습니다. HTML 수정은 사용하는 AI 에이전트가 수행합니다.
 
 ```sh
-npx --no-install slidehandoff convert slides.html --output slides.pptx --json
-npx --no-install slidehandoff convert slides.pptx --output slides.html --json
-npx --no-install slidehandoff convert slides.html --output slides.pptx --assets ./assets --selector ".slide" --json
-npx --no-install slidehandoff --help
+npx --no-install ppt-again convert slides.html --output slides.pptx --json
+npx --no-install ppt-again convert slides.pptx --output slides.html --json
+npx --no-install ppt-again convert slides.html --output slides.pptx --assets ./assets --selector ".slide" --json
+npx --no-install ppt-again --help
 ```
 
 `--assets`에는 HTML에서 상대 경로로 참조하는 이미지·CSS·글꼴이 들어 있는 폴더를 지정합니다. 해당 폴더는 파일과 하위 폴더를 합쳐 최대 1,024개 항목까지 읽습니다. 지원되는 정적 TTF·WOFF2만 글꼴 포함 대상입니다. 기존 출력 파일은 덮어쓰지 않습니다. `--json`은 표준 출력에 결과 객체 하나를 내보내며 종료 코드는 성공 0, 변환 실패 1, 사용법 오류 2입니다. 원본 스크립트는 실행하지 않고 외부 자산은 내려받지 않습니다. 복잡한 내용은 변환이 거부될 수 있습니다.

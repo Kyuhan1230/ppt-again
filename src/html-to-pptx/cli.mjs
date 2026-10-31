@@ -7,7 +7,7 @@ import {publicDiagnostic} from './public-diagnostics.mjs';
 import {assetPath} from './assets.mjs';
 
 const MiB=1024*1024;
-const help=`Usage: slidehandoff convert <input.html|input.pptx> --output <output.pptx|output.html> [--selector <css>] [--assets <directory>] [--json]\n       slidehandoff --help | --version`;
+const help=`Usage: ppt-again convert <input.html|input.pptx> --output <output.pptx|output.html> [--selector <css>] [--assets <directory>] [--json]\n       ppt-again --help | --version`;
 const fail=(code,message,exit=1)=>Object.assign(new Error(message),{code,exit});
 async function readFileLimited(file,max){
   const handle=await fs.open(file,'r');

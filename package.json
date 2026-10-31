@@ -25,6 +25,7 @@
     "image-size": "2.0.4"
   },
   "bin": {
+    "ppt-again": "src/html-to-pptx/cli.mjs",
     "slidehandoff": "src/html-to-pptx/cli.mjs"
   }
 }

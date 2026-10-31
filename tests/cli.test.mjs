@@ -8,6 +8,15 @@ import {unzipSync,strFromU8} from 'fflate';
 const cli=path.resolve('src/html-to-pptx/cli.mjs');
 const run=(...args)=>spawnSync(process.execPath,[cli,...args],{encoding:'utf8',timeout:120000});
 const source='<section data-slide style="width:800px;height:600px;position:relative;background:white"><p style="position:absolute;left:30px;top:30px;width:400px;height:60px;margin:0;font:20px Arial">Current text</p></section>';
+test('both CLI names provide the same commands and show the current name',async()=>{
+ const pkg=JSON.parse(await fs.readFile('package.json','utf8'));
+ assert.equal(pkg.bin['ppt-again'],pkg.bin.slidehandoff,'both commands must use the same converter');
+ for(const name of ['ppt-again','slidehandoff']){
+  assert.ok(pkg.bin[name],`${name} must be available`);
+  const result=spawnSync(process.execPath,[path.resolve(pkg.bin[name]),'--help'],{encoding:'utf8'});
+  assert.equal(result.status,0,result.stderr);assert.match(result.stdout,/Usage: ppt-again convert/);
+ }
+});
 test('converts both directions and refuses to overwrite',async t=>{
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'slidehandoff-cli-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));
  const input=path.join(dir,'input.html'),ppt=path.join(dir,'output.pptx'),html=path.join(dir,'output.html');await fs.writeFile(input,source);
