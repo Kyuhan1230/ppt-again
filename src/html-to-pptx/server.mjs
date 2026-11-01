@@ -11,7 +11,14 @@ const root=fileURLToPath(new URL('../../',import.meta.url));
 const json=(res,status,data)=>{if(res.destroyed)return;res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});res.end(JSON.stringify(data));};
 const pptxMime='application/vnd.openxmlformats-officedocument.presentationml.presentation';
 const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8'};
-const downloadName=job=>(job.fileName.replace(/[\\/]/g,'_').replace(/[\x00-\x1f\x7f<>:"|?*]/g,'_').replace(/\.(?:html?|pptx)$/i,'').slice(0,120).toWellFormed()||'slides')+'.'+(job.targetType??'pptx');
+const downloadName=job=>(job.fileName.replace(/[\\/]/g,'_').replace(/[\x00-\x1f\x7f<>:"|?*]/g,'_').replace(/\.(?:html?|pptx)$/i,'').slice(0,120).toWellFormed()||'slides')+(job.partialExport?'-partial':'')+'.'+(job.targetType??'pptx');
+function partialSlides(job){
+  const measured=job.measured,slides=measured?.model?.slides??[],errors=(measured?.diagnostics??[]).filter(d=>d.severity==='error'),ids=new Set(slides.map(s=>s.id));
+  if(job.sourceType!=='html'||job.targetType!=='pptx'||!errors.length||errors.some(d=>!d.slideId||!ids.has(d.slideId)))return null;
+  const blocked=new Set(errors.map(d=>d.slideId)),included=slides.filter(s=>!blocked.has(s.id));
+  if(!included.length||included.length===slides.length)return null;
+  return {included,excludedSlideNumbers:slides.flatMap((s,i)=>blocked.has(s.id)?[i+1]:[])};
+}
 function decodeBase64(value,maxBytes){
   const fail=statusCode=>{throw Object.assign(new Error('잘못된 파일 바이트입니다.'),{statusCode});};
   if(typeof value!=='string')fail(400);
@@ -28,10 +35,10 @@ export function summarizeJob(job,{developmentReports=false}={}) {
   const sourceType=job.sourceType??'html',targetType=job.targetType??'pptx';
   if(!job.measured)return {id:job.id,sourceType,targetType,status:'analyzing',exportAvailable:false,diagnostics:[],slides:[]};
   const measured=job.measured,failed=measured.diagnostics.some(d=>d.severity==='error');
-  const diagnostics=job.exportResult?.diagnostics??measured.diagnostics;
+  const diagnostics=job.exportResult?.diagnostics??measured.diagnostics,partial=partialSlides(job);
   return {id:job.id,fileName:job.fileName,sourceType,targetType,status:failed?'failed':'analyzed',profile:job.input.profile,sourceDigest:job.input.source.sha256,
     slideCount:measured.model?.slides.length??0,objectCount:measured.model?.slides.flatMap(s=>s.nodes).filter(n=>n.kind!=='group').length??0,
-    diagnostics:developmentReports?diagnostics:diagnostics.map(d=>publicDiagnostic(d,measured.model?.slides)),exportAvailable:!failed&&!job.exporting,visualQuality:'unmeasured',
+    diagnostics:developmentReports?diagnostics:diagnostics.map(d=>publicDiagnostic(d,measured.model?.slides)),exportAvailable:!failed&&!job.exporting,partialExportAvailable:Boolean(partial&&!job.exporting),partialSlideCount:partial?.included.length??0,excludedSlideNumbers:partial?.excludedSlideNumbers??[],downloadSlideCount:job.partialExport?partial?.included.length??0:measured.model?.slides.length??0,visualQuality:'unmeasured',
     exportStatus:job.exporting?'converting':job.exportResult?.status??'pending',
     downloadUrl:job.exportResult?.status==='generated'?`/api/jobs/${job.id}/download`:null,
     downloadFileName:downloadName(job),objectMapUrl:targetType==='pptx'&&developmentReports&&job.exportResult?.status==='generated'?`/api/jobs/${job.id}/object-map`:null,
@@ -70,7 +77,7 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
             if(body.pptxBase64!==undefined)return json(res,400,{error:'HTML과 PPTX를 한 번에 입력할 수 없습니다.'});
             if(body.assets!==undefined&&!Array.isArray(body.assets))return json(res,400,{error:'자산 목록은 배열이어야 합니다.'});
             const assets=(body.assets??[]).map(a=>({path:a?.path,mime:a?.mime||undefined,bytes:decodeBase64(a?.base64,16*1024*1024)}));
-            input={html:body.html,assets,slideSelector:body.slideSelector??null};
+            input={html:body.html,assets,slideSelector:body.slideSelector??null,allowTableOverlay:true};
           }
           const abortController=new AbortController();
           const id=jobs.create(ownerId,{direction:`${sourceType}-to-${targetType}`,sourceType,targetType,fileName:typeof body.fileName==='string'?body.fileName.slice(0,200):(sourceType==='pptx'?'입력.pptx':'입력 HTML'),input,abortController});
@@ -94,19 +101,23 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
         const target=body.target===undefined?(job.targetType??'pptx'):body.target;
         if(target!==(job.targetType??'pptx'))return json(res,400,{error:'HTML은 PPTX로, PPTX는 HTML로 변환할 수 있습니다.'});
         if(job.exporting||!job.measured)return json(res,409,{error:'이미 장표를 처리 중입니다.'});
-        if(job.measured.diagnostics.some(d=>d.severity==='error'))return json(res,422,summarize(job));
+        const partial=body.partial===true?partialSlides(job):null;
+        if(body.partial!==undefined&&typeof body.partial!=='boolean'||body.partial===true&&!partial)return json(res,422,summarize(job));
+        if(!partial&&job.measured.diagnostics.some(d=>d.severity==='error'))return json(res,422,summarize(job));
         if(job.exportResult?.status==='generated')return json(res,200,summarize(job));
         if(active>=2)return json(res,429,{error:'다른 장표를 처리 중입니다. 잠시 뒤 다시 실행해 주세요.'});
         active++;
         const abortController=new AbortController(),disconnected=()=>{if(!res.writableEnded)abortController.abort();};res.on('close',disconnected);
         try{
           if(!jobs.update(ownerId,job.id,{exporting:true,abortController}))return missing(res);
-          const {previews,...measured}=job.measured;
+          const {previews,...whole}=job.measured;
+          const ids=partial?new Set(partial.included.map(s=>s.id)):null;
+          const measured=partial?{...whole,model:{...whole.model,slides:partial.included},measurements:whole.measurements.filter(m=>ids.has(m.slideId)),diagnostics:whole.diagnostics.filter(d=>d.severity!=='error'&&(!d.slideId||ids.has(d.slideId)))}:whole;
           const pending=runConversion({input:target==='html'?measured.model:measured,operation:target==='html'?'export-html':'export-pptx',signal:abortController.signal,limits:conversionLimits});
           if(!jobs.update(ownerId,job.id,{pending})){abortController.abort();await pending.catch(()=>{});return missing(res);}
           const exportResult=await pending;
-          exportResult.diagnostics=[...new Map([...measured.diagnostics,...exportResult.diagnostics].map(d=>[JSON.stringify(d),d])).values()];
-          if(abortController.signal.aborted||!jobs.update(ownerId,body.jobId,{exportResult,exporting:false,pending:null}))return missing(res);
+          exportResult.diagnostics=[...new Map([...whole.diagnostics,...exportResult.diagnostics].map(d=>[JSON.stringify(d),d])).values()];
+          if(abortController.signal.aborted||!jobs.update(ownerId,body.jobId,{exportResult,partialExport:Boolean(partial),exporting:false,pending:null}))return missing(res);
           return json(res,exportResult.status==='generated'?200:422,summarize(job));
         }catch(error){await jobs.delete(ownerId,body.jobId);throw error;}
         finally{res.off('close',disconnected);active--;}

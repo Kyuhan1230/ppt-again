@@ -11,10 +11,10 @@ export function* walkHtml(node) { yield node; for (const child of node.childNode
 const nodeText = node => (node.childNodes ?? []).filter(n=>n.nodeName==='#text').map(n=>n.value).join('');
 const location = node => ({sourceRef:{path:`${node.tagName ?? node.nodeName}@${node.sourceCodeLocation?.startOffset ?? 0}`}});
 
-export async function readInput({html, assets: provided = [], slideSelector = null} = {},{allowEmbedded=true}={}) {
+export async function readInput({html, assets: provided = [], slideSelector = null, allowTableOverlay = false} = {},{allowEmbedded=true}={}) {
   const original = typeof html === 'string' ? html : '';
   const input = {schemaVersion:1,profile:'static-slides-v1',source:{html:original,sha256:sha256(original),slideSelector},
-    assets:[],project:null,diagnostics:[],styles:[],fontFaces:[],assetRefs:[],charts:[]};
+    assets:[],project:null,diagnostics:[],styles:[],fontFaces:[],assetRefs:[],charts:[],allowTableOverlay:allowTableOverlay===true};
   const fail = (code,message,loc,severity) => input.diagnostics.push(diagnostic(code,message,loc,severity));
   if (!original.trim() || Buffer.byteLength(original)>16*1024*1024) { fail('INPUT_INVALID','HTML 문자열이 없거나 16MiB를 초과합니다.'); return input; }
   if (slideSelector !== null && (typeof slideSelector!=='string'||!slideSelector.trim())) fail('INPUT_INVALID','장표 선택자는 비어 있지 않은 문자열이어야 합니다.');
@@ -35,7 +35,7 @@ export async function readInput({html, assets: provided = [], slideSelector = nu
     if(embedded.matched){
       input.embeddedSlides=[];input.diagnostics.push(...embedded.diagnostics);const sharedAssets=new Map(),faces=new Map();
       for(const [index,document] of embedded.documents.entries()){
-        const child=await readInput({html:document.html,assets:[...provided,...document.assets]},{allowEmbedded:false});
+        const child=await readInput({html:document.html,assets:[...provided,...document.assets],allowTableOverlay},{allowEmbedded:false});
         child.assets=child.assets.map(asset=>{if(!sharedAssets.has(asset.id))sharedAssets.set(asset.id,asset);return sharedAssets.get(asset.id);});
         for(const face of child.fontFaces){const key=JSON.stringify([face.family,face.weight,face.style,face.assetIds,face.unicodeRange]);if(!faces.has(key))faces.set(key,face);}
         input.diagnostics.push(...child.diagnostics.map(d=>({...d,slideId:`slide-${index+1}`,sourceRef:{...d.sourceRef,path:`embedded.pages[${index}].${d.sourceRef?.path??''}`}})));input.embeddedSlides.push(child);
@@ -121,6 +121,7 @@ export async function readInput({html, assets: provided = [], slideSelector = nu
     }
     if(attribute(n,'style'))scanCss(`x{${attribute(n,'style')}}`,location(n));
     if(input.profile!=='project-data-v1'&&n.tagName==='img')addAsset(attribute(n,'src'),location(n));
+    if(input.profile!=='project-data-v1'&&n.tagName==='image'&&n.namespaceURI==='http://www.w3.org/2000/svg')addAsset(attribute(n,'href'),location(n));
   }
   const p=input.project;
   if(input.profile==='project-data-v1'&&p!==null) {

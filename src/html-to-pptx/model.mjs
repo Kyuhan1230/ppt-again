@@ -5,12 +5,12 @@ const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const nonempty = v => typeof v === 'string' && v.trim().length > 0;
 const digest = v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
 const kinds = new Set(['text', 'shape', 'line', 'image', 'group', 'table', 'chart']);
-const codes = new Set(['INPUT_INVALID', 'SLIDE_ROOT_REQUIRED', 'ASSET_MISSING', 'FONT_UNAVAILABLE',
+const codes = new Set(['INPUT_INVALID', 'SLIDE_ROOT_REQUIRED', 'ASSET_MISSING', 'FONT_UNAVAILABLE', 'FONT_SUBSTITUTED',
   'FONT_INVALID','FONT_FORMAT_UNSUPPORTED','FONT_VARIABLE_UNSUPPORTED','FONT_STYLE_UNSUPPORTED','FONT_STYLE_MISMATCH','FONT_GLYPH_MISSING',
   'FONT_SOURCE_UNSUPPORTED','FONT_SUBSET_UNSUPPORTED','FONT_ASSET_LIMIT','FONT_EMBEDDING_RESTRICTED','FONT_EMBEDDING_INVALID','FONT_EMBEDDING_UNSUPPORTED',
   'FONT_PREVIEW_ONLY','FONT_BITMAP_ONLY','FONT_SUBSETTING_RESTRICTED','FONT_NOT_PORTABLE',
   'CHART_DATA_REQUIRED','CHART_DATA_MISMATCH','LIMIT_EXCEEDED',
-  'SCRIPT_REQUIRED', 'UNSUPPORTED_OBJECT', 'SVG_TEXT_NOT_EDITABLE', 'RENDER_INCOMPLETE', 'EXPORT_FAILED']);
+  'TABLE_LAYOUT_APPROXIMATED', 'SVG_TEXT_APPROXIMATED', 'SCRIPT_REQUIRED', 'UNSUPPORTED_OBJECT', 'SVG_TEXT_NOT_EDITABLE', 'RENDER_INCOMPLETE', 'EXPORT_FAILED']);
 
 export function diagnostic(code, message, location = {}, severity = 'error') {
   return {code, severity, slideId: location.slideId ?? null, nodeId: location.nodeId ?? null,
