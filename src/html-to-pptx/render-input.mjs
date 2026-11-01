@@ -45,6 +45,10 @@ export function renderInput(input,{fontAssetUrl=null}={}) {
       add('src',ref?assetDataUrl(assets.get(ref.assetId)):'data:,');
       if(ref)add('data-asset-id',ref.assetId);
       node.attrs=node.attrs.filter(a=>!['srcset','sizes','loading'].includes(a.name));
+    } else if(node.tagName==='image'&&node.namespaceURI==='http://www.w3.org/2000/svg'){
+      const ref=input.assetRefs.find(r=>r.sourceRef?.path===sourcePath&&r.usage==='image');
+      node.attrs=node.attrs.filter(a=>a.name!=='href');
+      if(ref){add('href',assetDataUrl(assets.get(ref.assetId)));add('data-asset-id',ref.assetId);}
     } else node.attrs=node.attrs.filter(a=>!['src','href'].includes(a.name)||a.value.startsWith('#'));
   }
   return {html:serialize(tree),sourceHadScripts};

@@ -3,10 +3,9 @@ import {promisify} from 'node:util';
 import fs from 'node:fs/promises';
 const execute=promisify(execFile),MiB=1024*1024;
 const operations=new Set(['analyze-html','analyze-pptx','export-pptx','read-pptx','export-html']);
-// The initial 1GiB observation threshold rejected the unchanged 8/84-slide
-// inputs. The measured Windows worker+browser budget is 2GiB; sampling can
-// briefly overshoot it and this is not an OS memory cap.
-export const conversionLimits=Object.freeze({timeoutMs:120000,oldSpaceMb:512,maxRssBytes:2048*MiB,rssIntervalMs:1000,closeGraceMs:1000});
+// The observed worker and browser memory budget is 2 GiB; sampling can
+// briefly overshoot it and is not an OS-enforced memory cap.
+export const conversionLimits=Object.freeze({timeoutMs:180000,oldSpaceMb:512,maxRssBytes:2048*MiB,rssIntervalMs:1000,closeGraceMs:1000});
 let active=0;
 const failure=(code,statusCode=400)=>Object.assign(new Error(code),{code,statusCode});
 

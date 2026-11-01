@@ -39,7 +39,7 @@ async function main(){
  if(!sourceType||outExt!==`.${targetType}`||(sourceType==='pptx'&&(values.selector!==undefined||values.assets!==undefined))||values.selector!==undefined&&!values.selector.trim())throw fail('USAGE',help,2);
  try{await fs.lstat(output);throw fail('OUTPUT_EXISTS','출력 파일이 이미 존재합니다. 다른 경로를 지정해 주세요.');}catch(e){if(e.code!=='ENOENT')throw e;}
  let bytes;try{bytes=await readFileLimited(inputPath,(sourceType==='html'?16:64)*MiB);}catch(e){if(e.code==='ENOENT')throw fail('USAGE','입력 파일을 찾을 수 없습니다.',2);throw e;}
- const input=sourceType==='html'?{html:bytes.toString('utf8'),assets:values.assets?await readAssets(values.assets):[],slideSelector:values.selector??null}:bytes;
+ const input=sourceType==='html'?{html:bytes.toString('utf8'),assets:values.assets?await readAssets(values.assets):[],slideSelector:values.selector??null,allowTableOverlay:true}:bytes;
  const controller=new AbortController(),abort=()=>controller.abort();process.on('SIGINT',abort);process.on('SIGTERM',abort);
  try{
   const {measured}=await runConversion({operation:sourceType==='html'?'analyze-html':'analyze-pptx',input,signal:controller.signal});

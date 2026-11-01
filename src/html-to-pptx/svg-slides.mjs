@@ -83,32 +83,83 @@ async function measureSvgPage({paths,timeoutMs,fragments=false,selector='[data-s
     const names=new Set(),groupIds=new Map();
     const unique=base=>{let n=base,i=1;while(names.has(n))n=`${base}-${++i}`;names.add(n);return n;};
     const groupFor=el=>{let top=null;for(let p=el.parentElement;p&&p!==root;p=p.parentElement)if(p.localName==='g')top=p;if(top&&!groupIds.has(top))groupIds.set(top,unique(top.id||`group-${groupIds.size+1}`));return top?groupIds.get(top):null;};
-    const elements=[...root.querySelectorAll('*')];
+    const elements=[...root.querySelectorAll('*')],separatedNested=new Set();
     for(const [index,el] of elements.entries()){
       const tag=el.localName;
       if(el.closest('defs,clipPath,mask,marker,pattern')||['g','a','title','desc','style','tspan'].includes(tag)||!visible(el))continue;
-      if(fragments&&el.parentElement?.closest('svg')!==root)continue;
+      if(fragments&&el.parentElement?.closest('svg')!==root){const nested=el.parentElement?.closest('svg');if(!separatedNested.has(nested)||tag!=='text')continue;}
       const nodeId=unique(el.id||`${tag}-${index+1}`),s=getComputedStyle(el),m=matrix(el),sourceRef={slideId:id,path:el.dataset.sourcePath};
       if(fragments&&tag==='svg'){
         // getBoundingClientRect() is the artwork bounds, not the nested viewport.
         const parentMatrix=matrix(el.parentElement),x=el.x.baseVal.value,y=el.y.baseVal.value,w=el.width.baseVal.value,h=el.height.baseVal.value,p=point(parentMatrix,x,y);
         const b={x:p.x,y:p.y,w:round(w*parentMatrix.a),h:round(h*parentMatrix.d)};
-        const styled=[el,...el.querySelectorAll('*')],unsafe=styled.some(item=>{const st=getComputedStyle(item);return [...item.attributes].some(a=>a.name==='href'||a.name==='xlink:href')||[st.fill,st.stroke,st.filter,st.clipPath,st.maskImage,st.markerStart,st.markerMid,st.markerEnd].some(v=>v&&v.includes('url('))||st.mixBlendMode!=='normal';});
+        const localPaint=value=>{
+          if(!value?.includes('url('))return true;
+          const ref=value.match(/^url\(["']?(?:https:\/\/html-input\.invalid\/document)?#([^"'()\s]+)["']?\)$/)?.[1];
+          const matches=ref?[...el.querySelectorAll('[id]')].filter(item=>item.id===ref):[];
+          return matches.length===1&&['linearGradient','radialGradient'].includes(matches[0].localName)&&document.getElementById(ref)===matches[0];
+        };
+        const styled=[el,...el.querySelectorAll('*')],unsafe=styled.some(item=>{const st=getComputedStyle(item);return [...item.attributes].some(a=>a.name==='href'||a.name==='xlink:href')||![st.fill,st.stroke].every(localPaint)||[st.filter,st.clipPath,st.maskImage,st.markerStart,st.markerMid,st.markerEnd].some(v=>v&&v.includes('url('))||st.mixBlendMode!=='normal';});
         let blended=false;for(let p=el.parentElement;p&&p!==root;p=p.parentElement)if(getComputedStyle(p).mixBlendMode!=='normal')blended=true;
         const cssSize=['x','y','width','height'].every(k=>s[k]==='auto'||/^-?\d+(?:\.\d+)?px$/.test(s[k])&&Math.abs(parseFloat(s[k])-el[k].baseVal.value)<.001);
         const outsideRoot=['hidden','clip','scroll','auto'].includes(rootStyle.overflowX)&&(b.x<svgBox.x-.01||b.x+b.w>svgBox.x+svgBox.w+.01)||['hidden','clip','scroll','auto'].includes(rootStyle.overflowY)&&(b.y<svgBox.y-.01||b.y+b.h>svgBox.y+svgBox.h+.01);
-        if(unsafe||blended||!cssSize||outsideRoot||el.hasAttribute('transform')||s.transform!=='none'||el.querySelector('svg,text,tspan,textPath,image,use,foreignObject,script')||!el.viewBox.baseVal.width||!el.viewBox.baseVal.height||b.w<=0||b.h<=0||Math.abs(parentMatrix.b)>=1e-6||Math.abs(parentMatrix.c)>=1e-6||parentMatrix.a<=0||Math.abs(parentMatrix.a-parentMatrix.d)>=1e-6||Math.abs(m.b)>=1e-6||Math.abs(m.c)>=1e-6||m.a<=0||Math.abs(m.a-m.d)>=1e-6||s.overflowX!=='hidden'||s.overflowY!=='hidden'||s.backgroundColor!=='rgba(0, 0, 0, 0)'&&s.backgroundColor!=='transparent'||s.backgroundImage!=='none'||s.boxShadow!=='none'||['Top','Right','Bottom','Left'].some(side=>parseFloat(s[`border${side}Width`])>0||parseFloat(s[`padding${side}`])>0)){
+        const nestedTexts=[...el.querySelectorAll('text')],nestedRect=el.getBoundingClientRect(),paintOrder=[...el.querySelectorAll('*')];
+        const invalidText=nestedTexts.some(text=>{const r=text.getBoundingClientRect();if(text.closest('defs')||r.left<nestedRect.left-.01||r.top<nestedRect.top-.01||r.right>nestedRect.right+.01||r.bottom>nestedRect.bottom+.01)return true;const later=paintOrder.slice(paintOrder.indexOf(text)+1).filter(item=>!text.contains(item)&&['rect','circle','ellipse','line','path','polygon','polyline'].includes(item.localName)&&!item.closest('defs'));return later.some(item=>{const q=item.getBoundingClientRect(),paint=getComputedStyle(item),pad=paint.stroke==='none'?0:(parseFloat(paint.strokeWidth)||0)*Math.max(Math.abs(m.a),Math.abs(m.d))/2*renderScale;return q.right+pad>r.left&&q.left-pad<r.right&&q.bottom+pad>r.top&&q.top-pad<r.bottom;});});
+        if(unsafe||blended||!cssSize||outsideRoot||invalidText||el.hasAttribute('transform')||s.transform!=='none'||el.querySelector('svg,textPath,image,use,foreignObject,script')||!el.viewBox.baseVal.width||!el.viewBox.baseVal.height||b.w<=0||b.h<=0||Math.abs(parentMatrix.b)>=1e-6||Math.abs(parentMatrix.c)>=1e-6||parentMatrix.a<=0||Math.abs(parentMatrix.a-parentMatrix.d)>=1e-6||Math.abs(m.b)>=1e-6||Math.abs(m.c)>=1e-6||m.a<=0||Math.abs(m.a-m.d)>=1e-6||s.overflowX!=='hidden'||s.overflowY!=='hidden'||s.backgroundColor!=='rgba(0, 0, 0, 0)'&&s.backgroundColor!=='transparent'||s.backgroundImage!=='none'||s.boxShadow!=='none'||['Top','Right','Bottom','Left'].some(side=>parseFloat(s[`border${side}Width`])>0||parseFloat(s[`padding${side}`])>0)){
           issue('중첩 SVG의 글자·참조·효과 또는 뷰포트는 아직 보존할 수 없습니다.',id,nodeId);continue;
         }
-        const copy=el.cloneNode(true);inlineComputed(el,copy);for(const style of copy.querySelectorAll('style'))style.remove();
+        const copy=el.cloneNode(true);inlineComputed(el,copy);for(const style of copy.querySelectorAll('style'))style.remove();for(const text of copy.querySelectorAll('text'))text.remove();if(nestedTexts.length)separatedNested.add(el);
         copy.setAttribute('xmlns','http://www.w3.org/2000/svg');copy.removeAttribute('x');copy.removeAttribute('y');copy.removeAttribute('transform');copy.setAttribute('width',String(b.w));copy.setAttribute('height',String(b.h));
         copy.style.setProperty('width',`${b.w}px`,'important');copy.style.setProperty('height',`${b.h}px`,'important');copy.style.setProperty('transform','none','important');copy.style.setProperty('overflow',s.overflowX,'important');copy.style.setProperty('opacity',String(opacity(el)));
-        const markup=new XMLSerializer().serializeToString(copy),bytes=new TextEncoder().encode(markup).length;
+        const markup=new XMLSerializer().serializeToString(copy).replace(/url\(&quot;(#[^&<>"\s)]+)&quot;\)/g,'url($1)'),bytes=new TextEncoder().encode(markup).length;
         if(bytes>16*1024*1024||(artworkBytes+=bytes)>64*1024*1024){issue('SVG 그림 자산의 크기 한도를 초과했습니다.',id,nodeId,'error','LIMIT_EXCEEDED');break;}
         nodes.push({id:nodeId,kind:'image',boxCssPx:b,zOrder:nodes.length,content:{inlineSvg:markup,artworkOnly:true},style:{opacity:1},sourceRef,parentId:groupFor(el)});
         objects.push({nodeId,kind:'image',boxCssPx:b});continue;
       }
-      if(['foreignObject','use','image','svg','textPath','switch'].includes(tag)){issue(`SVG ${tag} 객체는 아직 편집 가능한 객체로 변환할 수 없습니다.`,id,nodeId);continue;}
+      if(tag==='image'){
+        const assetId=el.dataset.assetId,aspect=el.getAttribute('preserveAspectRatio')||'xMidYMid meet',rawBox=box(el);
+        if(!assetId||!/^asset-[a-f0-9]{64}$/.test(assetId)||!/^data:image\/(png|jpeg);base64,/i.test(el.getAttribute('href')||'')||!(/^(none|x(?:Min|Mid|Max)Y(?:Min|Mid|Max)(?: meet)?)$/.test(aspect))||s.filter!=='none'||s.clipPath!=='none'||s.maskImage&&s.maskImage!=='none'||s.mixBlendMode!=='normal') {issue('SVG 그림의 형식·회전·자르기는 아직 보존할 수 없습니다.',id,nodeId);continue;}
+        const image=new Image();image.src=el.getAttribute('href');try{await wait(image.decode());}catch{issue('SVG 그림을 읽을 수 없습니다.',id,nodeId);continue;}
+        if(Math.abs(m.b)>=1e-6||Math.abs(m.c)>=1e-6||m.a<=0||m.d<=0){
+          const blended=[];for(let parent=el.parentElement;parent&&parent!==slideRoot;parent=parent.parentElement){const ps=getComputedStyle(parent);if(ps.mixBlendMode!=='normal')blended.push(ps.mixBlendMode);}
+          const crop=fragments?{x:Math.max(0,svgBox.x),y:Math.max(0,svgBox.y),w:Math.min(width,svgBox.x+svgBox.w)-Math.max(0,svgBox.x),h:Math.min(height,svgBox.y+svgBox.h)-Math.max(0,svgBox.y)}:null;
+          let blendBackground=null;
+          if(fragments&&blended.length===1&&blended[0]==='lighten'){
+            const base=getComputedStyle(slideRoot),rgb=base.backgroundColor.match(/^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/);
+            let safeBackground=Boolean(rgb)&&base.backgroundImage==='none'&&Number(base.opacity)===1;
+            for(let parent=root;safeBackground&&parent&&parent!==slideRoot;parent=parent.parentElement){const ps=getComputedStyle(parent),rect=parent.getBoundingClientRect(),sameBackground=ps.backgroundColor===base.backgroundColor&&rect.left<=rr.x+crop.x*renderScale+.01&&rect.top<=rr.y+crop.y*renderScale+.01&&rect.right>=rr.x+(crop.x+crop.w)*renderScale-.01&&rect.bottom>=rr.y+(crop.y+crop.h)*renderScale-.01;if(ps.backgroundImage!=='none'||!['transparent','rgba(0, 0, 0, 0)'].includes(ps.backgroundColor)&&!sameBackground||Number(ps.opacity)!==1)safeBackground=false;}
+            const overlap=rect=>rect.right>rr.x+crop.x*renderScale&&rect.left<rr.x+(crop.x+crop.w)*renderScale&&rect.bottom>rr.y+crop.y*renderScale&&rect.top<rr.y+(crop.y+crop.h)*renderScale;
+            const transparent=color=>color==='transparent'||/^rgba\([^)]*[, /]0(?:\.0+)?\)$/.test(color);
+            for(const other of slideRoot.querySelectorAll('*')){
+              if(!safeBackground)break;if(other.contains(root)||root.contains(other)||!visible(other))continue;
+              const os=getComputedStyle(other),rect=other.getBoundingClientRect();
+              if(['::before','::after'].some(p=>!['none','normal','""'].includes(getComputedStyle(other,p).content))){safeBackground=false;break;}
+              for(const child of other.childNodes)if(child.nodeType===3&&child.data.trim()){const range=document.createRange();range.selectNode(child);if([...range.getClientRects()].some(overlap)){safeBackground=false;break;}}
+              if(!safeBackground||!overlap(rect))continue;
+              const painted=!transparent(os.backgroundColor)||os.backgroundImage!=='none'||['Top','Right','Bottom','Left'].some(side=>parseFloat(os[`border${side}Width`])>0&&!transparent(os[`border${side}Color`]))||['img','svg','canvas','video'].includes(other.localName);
+              if(painted){safeBackground=false;break;}
+            }
+            if(safeBackground)blendBackground=rgb.slice(1).map(Number);
+          }
+          const safe=fragments&&(!blended.length||blendBackground)&&rootStyle.overflowX==='hidden'&&rootStyle.overflowY==='hidden'&&el.parentElement===root&&[m.a,m.b,m.c,m.d,m.e,m.f].every(Number.isFinite);
+          const cw=Math.ceil(crop?.w*renderScale),ch=Math.ceil(crop?.h*renderScale);
+          if(!safe||cw<=0||ch<=0||cw*ch>16000000){issue('회전한 SVG 그림의 잘림을 안전하게 보존할 수 없습니다.',id,nodeId);continue;}
+          let x=el.x.baseVal.value,y=el.y.baseVal.value,w=el.width.baseVal.value,h=el.height.baseVal.value;
+          if(aspect!=='none'){const k=Math.min(w/image.naturalWidth,h/image.naturalHeight),iw=image.naturalWidth*k,ih=image.naturalHeight*k;x+=(w-iw)*(aspect.includes('xMid')?.5:aspect.includes('xMax')?1:0);y+=(h-ih)*(aspect.includes('YMid')?.5:aspect.includes('YMax')?1:0);w=iw;h=ih;}
+          const canvas=document.createElement('canvas');canvas.width=cw;canvas.height=ch;const ctx=canvas.getContext('2d');ctx.globalAlpha=opacity(el);ctx.setTransform(m.a*renderScale,m.b*renderScale,m.c*renderScale,m.d*renderScale,(m.e-crop.x)*renderScale,(m.f-crop.y)*renderScale);ctx.drawImage(image,x,y,w,h);
+          if(blendBackground){const pixels=ctx.getImageData(0,0,cw,ch);for(let i=0;i<pixels.data.length;i+=4)if(pixels.data[i+3])for(let c=0;c<3;c++)pixels.data[i+c]=Math.max(pixels.data[i+c],blendBackground[c]);ctx.putImageData(pixels,0,0);}
+          const inlinePng=canvas.toDataURL('image/png');if(inlinePng.length>24*1024*1024){issue('SVG 그림 자산의 크기 한도를 초과했습니다.',id,nodeId,'error','LIMIT_EXCEEDED');continue;}
+          nodes.push({id:nodeId,kind:'image',boxCssPx:crop,zOrder:nodes.length,content:{inlinePng,artworkOnly:true},style:{opacity:1},sourceRef,parentId:groupFor(el)});objects.push({nodeId,kind:'image',boxCssPx:crop});continue;
+        }
+        let b=rawBox;if(aspect!=='none'){
+          const scale=Math.min(rawBox.w/image.naturalWidth,rawBox.h/image.naturalHeight),w=image.naturalWidth*scale,h=image.naturalHeight*scale;
+          b={x:round(rawBox.x+(rawBox.w-w)*(aspect.includes('xMid')?.5:aspect.includes('xMax')?1:0)),y:round(rawBox.y+(rawBox.h-h)*(aspect.includes('YMid')?.5:aspect.includes('YMax')?1:0)),w:round(w),h:round(h)};
+        }
+        if(b.w<=0||b.h<=0)continue;
+        if(fragments&&(['hidden','clip','scroll','auto'].includes(rootStyle.overflowX)&&(b.x<svgBox.x-.01||b.x+b.w>svgBox.x+svgBox.w+.01)||['hidden','clip','scroll','auto'].includes(rootStyle.overflowY)&&(b.y<svgBox.y-.01||b.y+b.h>svgBox.y+svgBox.h+.01))){issue('SVG 영역 밖으로 잘리는 그림은 아직 보존할 수 없습니다.',id,nodeId);continue;}
+        nodes.push({id:nodeId,kind:'image',boxCssPx:b,zOrder:nodes.length,content:{assetId,artworkOnly:true},style:{opacity:opacity(el)},sourceRef,parentId:groupFor(el)});objects.push({nodeId,kind:'image',boxCssPx:b});continue;
+      }
+      if(['foreignObject','use','svg','textPath','switch'].includes(tag)){issue(`SVG ${tag} 객체는 아직 편집 가능한 객체로 변환할 수 없습니다.`,id,nodeId);continue;}
       if(!['rect','circle','ellipse','line','text','path','polygon','polyline'].includes(tag)){issue(`SVG ${tag} 객체는 지원하지 않습니다.`,id,nodeId);continue;}
       if(s.filter!=='none'||s.clipPath!=='none'||s.maskImage&&s.maskImage!=='none'){issue('SVG 필터·마스크·클리핑은 아직 지원하지 않습니다.',id,nodeId);continue;}
       const axisAligned=Math.abs(m.b)<1e-6&&Math.abs(m.c)<1e-6&&m.a>0&&m.d>0,uniform=axisAligned&&Math.abs(m.a-m.d)<1e-6;
@@ -121,27 +172,38 @@ async function measureSvgPage({paths,timeoutMs,fragments=false,selector='[data-s
         const text=el.textContent.replace(/[\t\r\n ]+/g,' ').trim();if(!text)continue;
         const onePosition=(element,attr)=>!element.hasAttribute(attr)||element[attr]?.baseVal?.numberOfItems===1;
         const spans=[...el.querySelectorAll('tspan')],span=spans[0],singlePositionedSpan=spans.length===1&&span.parentElement===el&&!span.children.length&&span.hasAttribute('x')&&span.hasAttribute('dy')&&!span.hasAttribute('y')&&[...el.childNodes].every(n=>n===span||n.nodeType===3&&!n.data.trim())&&['x','dy'].every(a=>onePosition(span,a));
-        const positionedLines=spans.length>1&&[...el.childNodes].every(n=>n.nodeType===3&&!n.data.trim()||n.nodeType===1&&n.localName==='tspan')&&!['dx','dy','rotate','textLength'].some(a=>el.hasAttribute(a))&&['x','y'].every(a=>onePosition(el,a))&&spans.every(t=>t.parentElement===el&&!t.children.length&&t.hasAttribute('x')&&t.hasAttribute('y')!==t.hasAttribute('dy')&&!['dx','rotate','textLength'].some(a=>t.hasAttribute(a))&&['x','y','dy'].every(a=>onePosition(t,a)));
+        const stretchedText=el.hasAttribute('textLength')&&!el.children.length&&el.getAttribute('lengthAdjust')==='spacingAndGlyphs'&&/^[가-힣a-zA-Z0-9 .,!?·:;()\-]+$/.test(text)&&text.length>1;
+        const scaledText=!uniform&&axisAligned&&!el.children.length&&!el.hasAttribute('textLength')&&/^[가-힣a-zA-Z0-9 .,!?·:;()→\-]+$/.test(text)&&text.length>0;
+        const lineSpans=[...el.children];
+        const positionedLines=lineSpans.length>1&&[...el.childNodes].every(n=>n.nodeType===3&&!n.data.trim()||n.nodeType===1&&n.localName==='tspan')&&!['dx','dy','rotate','textLength'].some(a=>el.hasAttribute(a))&&['x','y'].every(a=>onePosition(el,a))&&lineSpans.every(t=>t.hasAttribute('x')&&t.hasAttribute('y')!==t.hasAttribute('dy')&&!['dx','rotate','textLength'].some(a=>t.hasAttribute(a))&&['x','y','dy'].every(a=>onePosition(t,a))&&[...t.querySelectorAll('*')].every(c=>c.localName==='tspan'&&!['x','y','dx','dy','rotate','textLength'].some(a=>c.hasAttribute(a))));
         if(positionedLines&&uniform&&['auto','central'].includes(s.dominantBaseline)&&s.alignmentBaseline==='auto'){
           const parentId=groupFor(el);
-          for(const [lineIndex,line] of spans.entries()){
+          for(const [lineIndex,line] of lineSpans.entries()){
             const value=line.textContent.replace(/[\t\r\n ]+/g,' ').trim();if(!value)continue;
             const ls=getComputedStyle(line),lm=matrix(line),lineBox=box(line);
-            if(Math.abs(lm.b)>=1e-6||Math.abs(lm.c)>=1e-6||lm.a<=0||Math.abs(lm.a-lm.d)>=1e-6||!['auto','central'].includes(ls.dominantBaseline)||ls.alignmentBaseline!=='auto'||ls.fill.includes('url(')||ls.stroke!=='none'||parseFloat(ls.wordSpacing)!==0&&ls.wordSpacing!=='normal'){issue('위치가 지정된 SVG 글자 줄의 변환·기준선·색은 아직 지원하지 않습니다.',id,nodeId);continue;}
+            if(Math.abs(lm.b)>=1e-6||Math.abs(lm.c)>=1e-6||lm.a<=0||Math.abs(lm.a-lm.d)>=1e-6||[line,...line.querySelectorAll('*')].some(part=>{const ps=getComputedStyle(part);return !['auto','central'].includes(ps.dominantBaseline)||ps.alignmentBaseline!=='auto'||ps.fill.includes('url(')||ps.stroke!=='none'||parseFloat(ps.wordSpacing)!==0&&ps.wordSpacing!=='normal';})){issue('위치가 지정된 SVG 글자 줄의 변환·기준선·색은 아직 지원하지 않습니다.',id,nodeId);continue;}
             if(lineBox.w<=0||lineBox.h<=0)continue;
             const lineId=unique(`${nodeId}-line-${lineIndex+1}`),lineStyle=textStyle(line),position=line.getStartPositionOfChar(0),baseline=point(lm,position.x,position.y).y;
-            await fontCheck(lineStyle.fontFamily);
-            nodes.push({id:lineId,kind:'text',boxCssPx:lineBox,zOrder:nodes.length,content:{text:value,runs:[{text:value,style:lineStyle}]},style:lineStyle,sourceRef:{slideId:id,path:line.dataset.sourcePath??el.dataset.sourcePath},parentId});
+            const runs=[],walker=document.createTreeWalker(line,NodeFilter.SHOW_TEXT);let child;
+            while((child=walker.nextNode())){let text=child.data.replace(/[\t\r\n ]+/g,' ');if(runs.at(-1)?.text.endsWith(' '))text=text.replace(/^ +/,'');if(text)runs.push({text,style:textStyle(child.parentElement)});}
+            if(runs.length){runs[0].text=runs[0].text.trimStart();runs.at(-1).text=runs.at(-1).text.trimEnd();}
+            for(const run of runs)await fontCheck(run.style.fontFamily);
+            nodes.push({id:lineId,kind:'text',boxCssPx:lineBox,zOrder:nodes.length,content:{text:value,runs:runs.filter(r=>r.text)},style:lineStyle,sourceRef:{slideId:id,path:line.dataset.sourcePath??el.dataset.sourcePath},parentId});
             objects.push({nodeId:lineId,kind:'text',boxCssPx:lineBox,lines:[{text:value,...lineBox}],baseline,baselineMethod:'SVG getStartPositionOfChar',lineAdvance:null});
           }
           continue;
         }
-        if(!uniform||[el,...el.querySelectorAll('*')].some(e=>['dx','dy','rotate','textLength'].some(a=>e.hasAttribute(a)&&!(singlePositionedSpan&&e===span&&a==='dy')))||spans.some(e=>(e.hasAttribute('x')||e.hasAttribute('y'))&&!(singlePositionedSpan&&e===span))||el.querySelector('textPath')||!['x','y'].every(a=>onePosition(el,a))||!['auto','central'].includes(s.dominantBaseline)||s.alignmentBaseline!=='auto'){
+        if(!uniform&&!scaledText||[el,...el.querySelectorAll('*')].some(e=>['dx','dy','rotate','textLength'].some(a=>e.hasAttribute(a)&&!(singlePositionedSpan&&e===span&&a==='dy')&&!(stretchedText&&e===el&&a==='textLength')))||spans.some(e=>(e.hasAttribute('x')||e.hasAttribute('y'))&&!(singlePositionedSpan&&e===span))||el.querySelector('textPath')||!['x','y'].every(a=>onePosition(el,a))||!['auto','central'].includes(s.dominantBaseline)||s.alignmentBaseline!=='auto'){
           issue('회전·개별 글자 위치·여러 줄 위치가 지정된 SVG 글자는 아직 지원하지 않습니다.',id,nodeId);continue;
         }
-        if([el,...spans].some(item=>{const textPaint=getComputedStyle(item);return textPaint.fill.includes('url(')||textPaint.stroke!=='none'||parseFloat(textPaint.wordSpacing)!==0&&textPaint.wordSpacing!=='normal'||!['auto','central'].includes(textPaint.dominantBaseline)||textPaint.alignmentBaseline!=='auto';})){issue('SVG 글자의 그라데이션·외곽선·단어 간격·기준선은 아직 지원하지 않습니다.',id,nodeId);continue;}
+        const solidOutline=!spans.length&&s.stroke!=='none'&&!s.stroke.includes('url(')&&parseFloat(s.strokeWidth)>0&&Number(s.strokeOpacity)===1&&Number(s.fillOpacity)===1&&opacity(el)===1&&s.strokeDasharray==='none';
+        if([el,...spans].some(item=>{const textPaint=getComputedStyle(item);return textPaint.fill.includes('url(')||textPaint.stroke!=='none'&&!solidOutline||parseFloat(textPaint.wordSpacing)!==0&&textPaint.wordSpacing!=='normal'||!['auto','central'].includes(textPaint.dominantBaseline)||textPaint.alignmentBaseline!=='auto';})){issue('SVG 글자의 그라데이션·외곽선·단어 간격·기준선은 아직 지원하지 않습니다.',id,nodeId);continue;}
         kind='text';style=textStyle(el);const runs=[],tw=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);let child;
+        if(stretchedText){const natural=el.cloneNode(true);natural.removeAttribute('textLength');natural.removeAttribute('lengthAdjust');natural.removeAttribute('id');el.after(natural);const width=natural.getComputedTextLength();natural.remove();const wanted=el.getComputedTextLength(),spacing=(s.letterSpacing==='normal'?0:parseFloat(s.letterSpacing))*m.a+(wanted-width)*m.a/(text.length-1);if(!Number.isFinite(spacing)){issue('SVG 글자 간격을 측정할 수 없습니다.',id,nodeId);continue;}style.letterSpacing=`${spacing}px`;issue('글자 폭을 글자 간격으로 근사하여 원본 모양과 다를 수 있습니다.',id,nodeId,'warning','SVG_TEXT_APPROXIMATED');}
+        if(scaledText){style.fontSize=parseFloat(s.fontSize)*m.d;const spacing=(s.letterSpacing==='normal'?0:parseFloat(s.letterSpacing))*m.d+(text.length>1?el.getComputedTextLength()*(m.a-m.d)/(text.length-1):0);if(!Number.isFinite(spacing)){issue('SVG 글자 간격을 측정할 수 없습니다.',id,nodeId);continue;}style.letterSpacing=`${spacing}px`;issue('글자 폭을 글자 간격으로 근사하여 원본 모양과 다를 수 있습니다.',id,nodeId,'warning','SVG_TEXT_APPROXIMATED');}
         while((child=tw.nextNode())){let value=child.data.replace(/[\t\r\n ]+/g,' ');if(runs.at(-1)?.text.endsWith(' '))value=value.replace(/^ +/,'');if(value)runs.push({text:value,style:textStyle(child.parentElement)});}
+        if(solidOutline){const outline={color:s.stroke,width:parseFloat(s.strokeWidth)*m.a};style.outline=outline;for(const run of runs)run.style.outline=outline;}
+        if(stretchedText||scaledText)for(const run of runs){run.style.letterSpacing=style.letterSpacing;if(scaledText)run.style.fontSize=style.fontSize;}
         if(runs.length){runs[0].text=runs[0].text.trimStart();runs.at(-1).text=runs.at(-1).text.trimEnd();}
         for(const run of runs){await fontCheck(run.style.fontFamily);if(run.style.color.includes('url('))issue('SVG 글자의 그라데이션 색은 아직 지원하지 않습니다.',id,nodeId);}
         content={text,runs:runs.filter(r=>r.text)};
@@ -221,7 +283,7 @@ async function measureSvgPage({paths,timeoutMs,fragments=false,selector='[data-s
 }
 
 export async function measureSvgFragments(session,{selector,timeoutMs,slots}){
-  const paths=await session.page.evaluate(paths=>[...document.querySelectorAll('svg')].filter(el=>paths.includes(el.dataset.sourcePath)&&el.querySelector('text')).map(el=>el.dataset.sourcePath),slots.map(s=>s.path));
+  const paths=await session.page.evaluate(paths=>[...document.querySelectorAll('svg')].filter(el=>paths.includes(el.dataset.sourcePath)&&el.querySelector('text,image')).map(el=>el.dataset.sourcePath),slots.map(s=>s.path));
   if(!paths.length)return {fragments:[],diagnostics:[],fonts:[]};
   const measured=await session.page.evaluate(measureSvgPage,{paths,timeoutMs,fragments:true,selector,slots});
   return {fragments:measured.slides.map((slide,i)=>({slideId:slide.id,svgPath:slide.svgPath,nodes:slide.nodes,objects:measured.measurements[i].objects})),diagnostics:measured.diagnostics,fonts:measured.fonts};

@@ -170,7 +170,7 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
         if(node.kind==='shape'&&st.assetId)addBackground(st.assetId,box,node.id,node.sourceRef,st.opacity??1);
         if(node.kind==='text'){
           const runOptions=s=>({...resolveTextFont(s,source),fontSize:s.fontSize*pointScale,italic:s.fontStyle==='italic',color:paint(s.color,st.opacity).color,transparency:paint(s.color,st.opacity).transparency,charSpacing:s.letterSpacing&&s.letterSpacing!=='normal'?parseFloat(s.letterSpacing)*pointScale:0,underline:s.textDecoration?.includes('underline')?{style:'sng'}:undefined,breakLine:false});
-          const runs=(node.content.runs??[{text:node.content.text,style:st}]).map(r=>{
+          let runs=(node.content.runs??[{text:node.content.text,style:st}]).map(r=>{
             const options=runOptions(r.style),outline=r.style.outline;
             if(outline){
               const color=paint(outline.color,st.opacity??1);
@@ -179,6 +179,9 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
             }
             return {text:r.text,options};
           });
+          if(node.content.tableCellGroup){
+            const lines=[];for(const run of runs){const segments=run.text.split('\n');for(let i=0;i<segments.length;i++){if(segments[i])lines.push({text:segments[i],options:{...run.options}});if(i<segments.length-1){if(!lines.length)lines.push({text:'',options:{...run.options}});lines.at(-1).options.breakLine=true;}}}runs=lines;
+          }
           const padding=st.padding??{left:0,right:0,top:0,bottom:0};
           // Browser and Office advances can differ slightly in a tight auto-sized
           // label. Preserve a measured single line without enlarging its box or
