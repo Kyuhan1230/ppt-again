@@ -143,7 +143,12 @@ export async function runConversion({input,operation,signal,limits={}}={}){
     const abort=()=>stop(failure('JOB_CANCELLED',409));
     const sample=(initial=false)=>{
       if(sampling||finishing)return;
-      sampling=processTree(owned,initial?child.pid:null).then(rows=>{
+      const observe=()=>processTree(owned,initial?child.pid:null);
+      sampling=observe().catch(error=>{
+        // Before the worker receives input, one timed-out census can be retried safely.
+        if(initial&&error.killed&&stoppedAt===null&&!finishing)return observe();
+        throw error;
+      }).then(rows=>{
         resourceUsage.rssSamples++;
         const rss=rows.reduce((sum,row)=>sum+row.rss,0);
         if(rss>(resourceUsage.peakRssBytes??0)){resourceUsage.peakRssBytes=rss;resourceUsage.peakProcesses=rows.map(({pid,parent,rss})=>({pid,parent,rss}));}
