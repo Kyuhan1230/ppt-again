@@ -52,7 +52,10 @@ process.on('message',async message=>{
           if(cancelled)return;
           // Browser measurement is preview evidence, not a replacement for the
           // current PPT's coordinates, content, font declarations or assets.
-          const diagnostics=[...measured.diagnostics,...preview.measured.diagnostics];
+          // A missing local font affects the preview, but the HTML can retain
+          // the original font name and be used on another machine.
+          const previewDiagnostics=preview.measured.diagnostics.map(d=>d.code==='FONT_UNAVAILABLE'&&d.severity==='error'?{...d,code:'FONT_PREVIEW_SUBSTITUTED',severity:'warning'}:d);
+          const diagnostics=[...measured.diagnostics,...previewDiagnostics];
           measured={...preview.measured,model:parsed.model,diagnostics:[...new Map(diagnostics.map(d=>[JSON.stringify(d),d])).values()]};
         }
       }

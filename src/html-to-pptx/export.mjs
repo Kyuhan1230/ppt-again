@@ -208,7 +208,10 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
           }
         }else if(node.kind==='image'){
           const asset=measured.model.assets.find(a=>a.id===node.content.assetId);if(!asset)throw new Error('Picture asset missing');
-          slide.addImage({...box,data:assetDataUrl(asset),transparency:(1-(st.opacity??1))*100});
+          const crop=node.content.crop;
+          const fullWidth=crop?box.w/(1-(crop.left+crop.right)/100000):box.w,fullHeight=crop?box.h/(1-(crop.top+crop.bottom)/100000):box.h;
+          const sizing=crop?{type:'crop',x:fullWidth*crop.left/100000,y:fullHeight*crop.top/100000,w:box.w,h:box.h}:undefined;
+          slide.addImage({...box,w:fullWidth,h:fullHeight,sizing,data:assetDataUrl(asset),transparency:(1-(st.opacity??1))*100});
           if(asset.mime==='image/svg+xml'&&!node.content.artworkOnly)diagnostics.push(diagnostic('UNSUPPORTED_OBJECT','SVG는 그림 객체입니다. 내부 글자와 경로를 개별 편집할 수 없습니다.',{slideId:source.id,nodeId:node.id,sourceRef:node.sourceRef},'warning'));
         }
         objectMap.push({sourceSlideId:source.id,sourceNodeId:node.id,sourceRef:node.sourceRef,pptSlideNumber:index+1,pptObjectId:objectId++,pptObjectName:node.id,support:node.kind==='text'?'native-text':node.kind==='image'?(node.content.artworkOnly?'background-art':'picture'):'native-shape',parentId:node.parentId});

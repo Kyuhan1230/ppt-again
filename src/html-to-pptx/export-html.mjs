@@ -55,6 +55,7 @@ export function exportHtml(model){
         }else if(node.kind==='image'){
           const asset=assets.get(node.content.assetId);if(!asset.mime.startsWith('image/'))throw new Error('그림에는 그림 자산만 사용할 수 있습니다.');
           tag='img';extra=` alt="" src="${esc(assetDataUrl(asset))}"`;style+='display:block;';
+          const crop=node.content.crop;if(crop)style+=`object-fit:fill;object-view-box:inset(${number(crop.top/1000)}% ${number(crop.right/1000)}% ${number(crop.bottom/1000)}% ${number(crop.left/1000)}%);`;
         }else if(node.kind==='group')style+='pointer-events:none;';
         else throw new Error('지원하지 않는 HTML 출력 객체입니다.');
         return `<${tag} data-source-id="${esc(node.id)}" data-kind="${node.kind}"${node.parentId?` data-parent-id="${esc(node.parentId)}"`:''}${extra} style="${esc(style)}">${tag==='img'?'':body+`</${tag}>`}`;

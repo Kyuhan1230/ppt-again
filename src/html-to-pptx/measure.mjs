@@ -342,6 +342,18 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
         }
       }
       let content=kind==='text'?{text,runs,...(paragraphLines?{tableCellGroup:true}:{})}:kind==='image'?{assetId:el.dataset.assetId??null}:{};
+      if(kind==='image'&&el.tagName==='IMG'){
+        const view=st.getPropertyValue('object-view-box');
+        if(view&&view!=='none'){
+          const match=/^inset\(\s*((?:\d+(?:\.\d+)?%\s*){1,4})\)$/i.exec(view),values=match?.[1].trim().split(/\s+/).map(v=>Math.round(parseFloat(v)*1000));
+          if(!values||st.objectFit!=='fill')at('UNSUPPORTED_OBJECT','그림 자르기는 백분율 inset과 object-fit:fill만 지원합니다.');
+          else{
+            const [top,right=top,bottom=top,left=right]=values,crop={left,top,right,bottom};
+            if(Object.values(crop).some(v=>v<0||v>=100000)||left+right>=100000||top+bottom>=100000)at('UNSUPPORTED_OBJECT','그림의 자르기 범위가 올바르지 않습니다.');
+            else if(Object.values(crop).some(Boolean))content.crop=crop;
+          }
+        }
+      }
       if(kind==='chart'){
         if(!chart){at('CHART_DATA_REQUIRED','차트 객체에 연결된 현재 JSON 데이터가 없습니다.');continue;}
         if(Number(st.opacity)!==1||st.boxShadow!=='none'||st.textShadow!=='none'||st.direction!=='ltr'||st.writingMode!=='horizontal-tb'||['Top','Right','Bottom','Left'].some(side=>parseFloat(st[`padding${side}`])!==0||parseFloat(st[`border${side}Width`])!==0)||el!==root&&(visibleColor(st.backgroundColor)||st.backgroundImage!=='none'))at('UNSUPPORTED_OBJECT','차트 영역의 배경·테두리·여백·투명도·효과는 별도 객체로 지정해 주세요.');
