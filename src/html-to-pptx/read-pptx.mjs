@@ -187,7 +187,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
       if(num(body,'rot')!==0||attr(body,'vert','horz')!=='horz'||num(body,'numCol',1)!==1||num(body,'rtlCol')!==0||num(body,'fromWordArt')!==0||child(body,'prstTxWarp')&&attr(child(body,'prstTxWarp'),'prst')!=='textNoShape')issue('회전·세로쓰기·다단·워드아트 텍스트는 아직 지원하지 않습니다.',id);
       const runStyle=(rPr,pPr)=>{
         const def=child(pPr,'defRPr'),get=k=>attr(rPr,k,attr(def,k)),latin=child(rPr,'latin')??child(def,'latin');
-        if(![null,'noStrike'].includes(get('strike'))||![null,'none'].includes(get('cap'))||Number(get('baseline')??0)!==0||![null,'none','sng'].includes(get('u'))||elements(rPr).some(n=>['highlight','effectLst','effectDag','gradFill','blipFill','uFill','uLn','hlinkClick','hlinkMouseOver'].includes(n.localName)))issue('취소선·대소문자 변환·첨자·효과 등 이 글자 서식은 아직 지원하지 않습니다.',id);
+        if(![null,'noStrike'].includes(get('strike'))||![null,'none'].includes(get('cap'))||Number(get('baseline')??0)!==0||![null,'none','sng'].includes(get('u'))||elements(rPr).some(n=>n.localName==='effectLst'?elements(n).length>0:['highlight','effectDag','gradFill','blipFill','uFill','uLn','hlinkClick','hlinkMouseOver'].includes(n.localName)))issue('취소선·대소문자 변환·첨자·효과 등 이 글자 서식은 아직 지원하지 않습니다.',id);
         const outline=child(rPr,'ln')??child(def,'ln');let textOutline;
         if(outline&&!child(outline,'noFill')){
           if(!child(outline,'solidFill')||elements(outline).some(n=>n.localName!=='solidFill')||all(outline,'alpha').some(n=>num(n,'val')!==100000))issue('불투명 단색 외의 글자 외곽선은 지원하지 않습니다.',id);
@@ -199,7 +199,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
       };
       for(const [pi,p] of paras.entries()){
         const pPr=child(p,'pPr');if(elements(pPr).some(n=>/^bu/.test(n.localName)&&n.localName!=='buNone'))issue('글머리표는 아직 지원하지 않습니다.',id);
-        if(num(pPr,'marL')||num(pPr,'marR')||num(pPr,'indent')||child(pPr,'tabLst'))issue('문단 들여쓰기·탭은 아직 지원하지 않습니다.',id);
+        if(num(pPr,'marL')||num(pPr,'marR')||num(pPr,'indent')||elements(child(pPr,'tabLst')).length)issue('문단 들여쓰기·탭은 아직 지원하지 않습니다.',id);
         if(['spcBef','spcAft'].some(k=>elements(child(pPr,k)).some(n=>num(n,'val')!==0)))diagnostics.push(diagnostic('PARAGRAPH_SPACING_APPROXIMATED','문단 앞뒤 간격은 그대로 옮기지 못했습니다.',{slideId:slide.id,nodeId:id},'warning'));
         if(pi&&attr(pPr,'algn','l')!==attr(child(paras[0],'pPr'),'algn','l'))issue('서로 다른 문단 정렬은 아직 지원하지 않습니다.',id);
         if(pi)runs.push({text:'\n',style:runs.at(-1)?.style??runStyle(child(p,'endParaRPr'),pPr)});
@@ -228,6 +228,9 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
           const off=child(xfrm,'off'),ext=child(xfrm,'ext');
           const raw={x:num(off,'x'),y:num(off,'y'),w:num(ext,'cx'),h:num(ext,'cy')};
           const box={x:px(raw.x*map.sx+map.tx),y:px(raw.y*map.sy+map.ty),w:px(raw.w*map.sx),h:px(raw.h*map.sy)};
+          // Bounds describe known unrotated PPT coordinates, not a rendered original image.
+          const bounds={x:box.x/slide.widthCssPx,y:box.y/slide.heightCssPx,w:box.w/slide.widthCssPx,h:box.h/slide.heightCssPx};
+          if(Object.values(bounds).every(Number.isFinite)&&bounds.x>=0&&bounds.y>=0&&bounds.w>0&&bounds.h>0&&bounds.x+bounds.w<=1&&bounds.y+bounds.h<=1)objectContexts.get(`${slide.id}:${id}`).bounds=bounds;
           const node={id,kind:'shape',boxCssPx:box,zOrder:slide.nodes.length,content:{},style:{opacity:1},sourceRef:{slideId:slide.id,elementId:id},parentId};
           if(object.localName==='graphicFrame'){
             const graphic=child(object,'graphic'),data=child(graphic,'graphicData');

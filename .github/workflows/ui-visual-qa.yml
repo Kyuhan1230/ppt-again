@@ -1,0 +1,30 @@
+name: Synthetic UI visual QA
+on:
+  push:
+    branches: [fix/pptx-diagnostics-ux]
+permissions:
+  contents: read
+concurrency:
+  group: synthetic-ui-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  screenshots:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: node scripts/capture-ui-qa.mjs
+        env:
+          QA_SCREENSHOT_DIR: ${{ runner.temp }}/ppt-again-ui-qa
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-ui-screenshots
+          path: ${{ runner.temp }}/ppt-again-ui-qa
+          retention-days: 7
+          if-no-files-found: warn

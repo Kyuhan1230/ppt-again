@@ -94,6 +94,8 @@ export function publicDiagnostic(item,slides=[]){
     if(name)result.objectName=name;
     if(font)result.fontFamily=font;
     if(objectTypes.has(item.objectType))result.objectType=item.objectType;
+    const b=item.bounds;
+    if(b&&['x','y','w','h'].every(k=>typeof b[k]==='number'&&Number.isFinite(b[k]))&&b.x>=0&&b.y>=0&&b.w>0&&b.h>0&&b.x+b.w<=1&&b.y+b.h<=1)result.bounds={x:b.x,y:b.y,w:b.w,h:b.h};
   }
   return result;
 }

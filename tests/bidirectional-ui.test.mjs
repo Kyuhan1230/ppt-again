@@ -44,7 +44,10 @@ test('repeated warnings are grouped into slide ranges without hiding errors',asy
  const context=await browser.newContext(),page=await context.newPage();try{
   await page.route('**/api/analyze',route=>route.fulfill({json:{id:'synthetic',fileName:'sample.html',sourceType:'html',targetType:'pptx',status:'failed',slideCount:25,slides:[],exportAvailable:false,diagnostics:[...Array.from({length:25},(_,i)=>({code:'FONT_FORMAT_UNSUPPORTED',severity:'warning',message:'글꼴 포함 제한',slideNumber:i+1})),{code:'UNSUPPORTED_OBJECT',severity:'error',message:'표현 오류',slideNumber:3}]}}));
   await page.goto(app.url);await select(page,'sample.html',source);await page.waitForFunction(()=>document.getElementById('status-badge').dataset.state==='failed');
-  const entries=page.locator('#diagnostic-list li');assert.equal(await entries.count(),2);assert.match(await entries.nth(0).innerText(),/1–25번 장표/);assert.match(await entries.nth(1).innerText(),/확인 필요.*표현 오류/s);assert.equal(await page.locator('#download-button').isDisabled(),true);
+  const groups=page.locator('#diagnostic-list > .diagnostic-group');assert.equal(await groups.count(),2);assert.match(await page.locator('#diagnostic-summary').innerText(),/변환 차단 1건.*확인 사항 25건/);assert.equal(await page.locator('#diagnostic-list > .diagnostic-raw').count(),1);
+  assert.equal(await groups.nth(0).locator('details').getAttribute('open'),null);assert.match(await groups.nth(0).locator('summary').innerText(),/차단/);
+  await groups.nth(0).locator('summary').click();assert.match(await groups.nth(0).innerText(),/표현 오류/);
+  await groups.nth(1).locator('summary').click();await groups.nth(1).locator('.diagnostic-objects > li').first().waitFor();assert.match(await groups.nth(1).innerText(),/1–25번 장표/);assert.equal(await page.locator('#download-button').isDisabled(),true);
  }finally{await context.close();}
 });
 test('partial export button describes omitted slides and downloads the supported slides',async()=>{
@@ -91,5 +94,16 @@ test('a cancelled slow file read cannot use the next analysis request signal',as
   await page.evaluate(()=>new Promise(resolve=>setTimeout(resolve,100)));
   assert.deepEqual(sent,['current.html']);assert.equal(app.jobs.size,1);assert.match(await page.locator('#status-message').textContent(),/current\.html/);
   await page.locator('#delete-button').click();await page.waitForFunction(()=>document.getElementById('status-badge').dataset.state==='deleted');assert.equal(app.jobs.size,0);
+ }finally{await context.close();}
+});
+
+test('diagnostic preview navigation shows only verified bounds and states unavailable positions',async()=>{
+ const context=await browser.newContext(),page=await context.newPage();try{
+  const picture='data:image/svg+xml;base64,'+Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450"><rect width="800" height="450" fill="#ffffff"/></svg>').toString('base64');
+  await page.route('**/api/analyze',route=>route.fulfill({json:{id:'synthetic-preview',fileName:'locations.pptx',sourceType:'pptx',targetType:'html',status:'analyzed',slideCount:2,slides:[{previewUrl:picture},{previewUrl:picture}],exportAvailable:true,diagnostics:[{code:'PPTX_OBJECT_PLACEHOLDER',severity:'warning',reasonKey:'PPTX_SHAPE_EFFECT_UNSUPPORTED',reason:'Synthetic effect',message:'Synthetic notice',slideNumber:2,objectName:'Known object',bounds:{x:.1,y:.2,w:.3,h:.4}},{code:'PPTX_OBJECT_PLACEHOLDER',severity:'warning',reasonKey:'PPTX_OBJECT_POSITION_UNSUPPORTED',reason:'Synthetic unknown position',message:'Synthetic notice',slideNumber:1,objectName:'Unknown object'}]}}));
+  await page.goto(app.url);await select(page,'locations.pptx',Buffer.from('synthetic-upload'));await analyze(page);
+  const groups=page.locator('#diagnostic-list > .diagnostic-group');await groups.nth(0).locator('summary').click();await groups.nth(0).getByRole('button',{name:'미리보기에서 확인'}).click();
+  assert.match(await page.locator('#slide-detail').innerText(),/2 \/ 2/);assert.equal(await page.locator('#problem-overlay').isVisible(),true);assert.match(await page.locator('#problem-overlay').getAttribute('style'),/left: 10%/);assert.match(await page.locator('#problem-location-note').innerText(),/원본 PowerPoint 화면은 아닙니다/);
+  await groups.nth(1).locator('summary').click();await groups.nth(1).getByRole('button',{name:'미리보기에서 확인'}).click();assert.equal(await page.locator('#problem-overlay').isHidden(),true);assert.match(await page.locator('#problem-location-note').innerText(),/위치 정보는 확인할 수 없습니다/);
  }finally{await context.close();}
 });

@@ -145,7 +145,7 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
         const preview=/^\/api\/jobs\/([a-f0-9-]+)\/preview\/(\d+)\.png$/.exec(route);
         if(preview){const j=jobs.get(ownerId,preview[1]);if(!j)return missing(res);const s=j.measured?.model?.slides[Number(preview[2])-1],image=j.measured?.previews.find(p=>p.slideId===s?.id);if(!image)return missing(res);res.writeHead(200,{'content-type':'image/png','cache-control':'no-store','x-content-type-options':'nosniff'});return res.end(Buffer.from(image.bytes));}
         if(jobRoute){const j=jobs.get(ownerId,jobRoute[1]);return j?json(res,200,summarize(j)):missing(res);}
-        const relative={'/':'web/html-to-pptx/index.html','/app.js':'web/html-to-pptx/app.js','/input-policy.js':'web/html-to-pptx/input-policy.js','/style.css':'web/html-to-pptx/style.css'}[route];
+        const relative={'/':'web/html-to-pptx/index.html','/app.js':'web/html-to-pptx/app.js','/input-policy.js':'web/html-to-pptx/input-policy.js','/diagnostic-view.js':'web/html-to-pptx/diagnostic-view.js','/style.css':'web/html-to-pptx/style.css'}[route];
         if(typeof relative==='string'){
           const file=path.join(root,relative),bytes=await fs.readFile(file);
           res.writeHead(200,{'content-type':mime[path.extname(file)],'x-content-type-options':'nosniff','cache-control':'no-store','Content-Security-Policy':"default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"});return res.end(bytes);

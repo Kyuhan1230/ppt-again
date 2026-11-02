@@ -1,3 +1,4 @@
+import {renderDiagnostics,validBounds} from './diagnostic-view.js';
 import {selectedFileState,sourceType} from './input-policy.js';
 const $=id=>document.getElementById(id);
 let revision=0,controller=null,currentJob=null,busy=false;
@@ -36,7 +37,13 @@ for(const event of ['dragenter','dragover'])dropArea.addEventListener(event,e=>{
 for(const event of ['dragleave','drop'])dropArea.addEventListener(event,e=>{e.preventDefault();dropArea.classList.remove('dragging');});
 dropArea.addEventListener('drop',e=>{if(e.dataTransfer.files.length!==1){$('html-file').value='';reset();status('failed','HTML 또는 PPTX 파일 한 개를 선택해 주세요.');return;}$('html-file').files=e.dataTransfer.files;$('html-file').dispatchEvent(new Event('change',{bubbles:true}));});
 const base64=buffer=>{const bytes=new Uint8Array(buffer);let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(binary);};
-function showSlide(index){const slide=currentJob.slides[index];if(!slide?.previewUrl)return;$('preview-image').src=slide.previewUrl;$('preview-image').alt=`${index+1}번 장표 미리보기`;$('slide-detail').textContent=`${index+1} / ${currentJob.slideCount}장`;for(const [i,button]of [...$('slide-list').children].entries())button.setAttribute('aria-current',String(i===index));}
+function showSlide(index,diagnostic=null){
+ const slide=currentJob.slides[index];if(!slide?.previewUrl)return;
+ $('preview-image').src=slide.previewUrl;$('preview-image').alt=`${index+1}번 HTML 미리보기`;$('slide-detail').textContent=`${index+1} / ${currentJob.slideCount}장`;
+ const overlay=$('problem-overlay'),note=$('problem-location-note');overlay.hidden=true;note.hidden=!diagnostic;note.textContent='';
+ if(diagnostic){if(validBounds(diagnostic.bounds)){const b=diagnostic.bounds;Object.assign(overlay.style,{left:`${b.x*100}%`,top:`${b.y*100}%`,width:`${b.w*100}%`,height:`${b.h*100}%`});overlay.hidden=false;note.textContent=`HTML 미리보기 · ${diagnostic.objectName??'선택한 객체'}의 기록된 위치입니다. 원본 PowerPoint 화면은 아닙니다.`;}else note.textContent='이 객체의 위치 정보는 확인할 수 없습니다. 해당 장표의 HTML 미리보기만 표시합니다.';}
+ for(const [i,button]of [...$('slide-list').children].entries())button.setAttribute('aria-current',String(i===index));
+}
 function showResult(job){
   durationNotice(job.slideCount);
   currentJob=job;const failed=job.status==='failed';status(job.status,failed?(job.sourceType==='pptx'?'아래 지원 제한을 확인하고 PPT를 수정한 뒤 다시 선택해 주세요.':'아래 항목을 수정하거나 장표 영역을 지정한 뒤 다시 분석하세요.'):`${job.fileName}에서 장표 ${job.slideCount}장을 확인했습니다.`);
@@ -46,9 +53,8 @@ function showResult(job){
   $('partial-download-button').hidden=!job.partialExportAvailable;$('partial-download-button').disabled=!job.partialExportAvailable;$('partial-download-note').hidden=!job.partialExportAvailable;
   if(job.partialExportAvailable){$('partial-download-button').textContent=`변환 가능한 ${job.partialSlideCount}장만 받기`;$('partial-download-note').textContent=`전체 ${job.slideCount}장 중 오류가 있는 ${job.excludedSlideNumbers.join(', ')}번 장표는 빠집니다. 원래 순서를 유지합니다.`;}
   $('diagnostic-list').replaceChildren();$('diagnostics').hidden=!job.diagnostics.length;
-  const groups=new Map();for(const d of job.diagnostics){const key=JSON.stringify([d.severity,d.code,d.message,d.objectName,d.objectType,d.fontFamily,d.reasonKey]);if(!groups.has(key))groups.set(key,{...d,numbers:new Set()});if(d.slideNumber)groups.get(key).numbers.add(d.slideNumber);}
-  for(const d of groups.values()){const li=document.createElement('li'),small=document.createElement('small'),numbers=[...d.numbers].sort((a,b)=>a-b),ranges=[];for(let i=0;i<numbers.length;){let end=i;while(end+1<numbers.length&&numbers[end+1]===numbers[end]+1)end++;ranges.push(end===i?`${numbers[i]}`:`${numbers[i]}–${numbers[end]}`);i=end+1;}li.append(document.createTextNode(`${d.severity==='error'?'확인 필요':'지원 제한'} · ${d.message}`));small.textContent=[ranges.length?`${ranges.join(', ')}번 장표`:'',d.objectName?`객체: ${d.objectName}`:'',d.objectType?`유형: ${d.objectType}`:'',d.fontFamily?`글꼴: ${d.fontFamily}`:'',d.reason?`원인: ${d.reason}`:''].filter(Boolean).join(' · ');li.append(small);$('diagnostic-list').append(li);}
-  const visible=job.slides.some(s=>s.previewUrl);$('empty-preview').querySelector('p').textContent=!visible&&job.sourceType==='pptx'&&job.exportAvailable?'미리보기를 만들지 못했지만 HTML은 다운로드할 수 있습니다. 다운로드 후 배치를 확인하세요.':'장표를 준비하고 있습니다.';$('preview-area').hidden=!visible;$('empty-preview').hidden=visible;
+  renderDiagnostics({document,container:$('diagnostic-list'),summary:$('diagnostic-summary'),diagnostics:job.diagnostics,slides:job.slides,onSelectSlide:(index,diagnostic)=>{showSlide(index,diagnostic);$('preview-area').scrollIntoView({block:'nearest',behavior:'smooth'});}});
+  const visible=job.slides.some(s=>s.previewUrl);$('empty-preview').querySelector('p').textContent=!visible&&job.sourceType==='pptx'&&job.exportAvailable?'미리보기를 만들지 못했지만 HTML은 다운로드할 수 있습니다. 다운로드 후 배치를 확인하세요.':!visible?'미리보기를 만들지 못했습니다. 아래 원인별 진단을 확인하세요. 원본 PowerPoint 이미지는 제공되지 않습니다.':'장표 미리보기';$('preview-area').hidden=!visible;$('empty-preview').hidden=visible;
   if(visible){$('slide-count').textContent=`${job.slideCount}장`;$('object-count').textContent=`${targetLabel()}로 저장`;$('slide-list').replaceChildren();job.slides.forEach((s,i)=>{const b=document.createElement('button');b.type='button';b.textContent=String(i+1);b.setAttribute('aria-label',`${i+1}번 장표`);b.addEventListener('click',()=>showSlide(i));$('slide-list').append(b);});showSlide(job.slides.findIndex(s=>s.previewUrl));}
 }
 $('analyze-form').addEventListener('submit',async event=>{
