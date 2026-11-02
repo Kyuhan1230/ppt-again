@@ -26,7 +26,7 @@ test('PPTX HTML export remains available without a browser preview and keeps cur
 test('new UI settings are explicit and serialized; diagnostic details use text nodes',async()=>{
  const html=await fs.readFile(new URL('../web/html-to-pptx/index.html',import.meta.url),'utf8'),js=await fs.readFile(new URL('../web/html-to-pptx/app.js',import.meta.url),'utf8');
  for(const policy of ['original','malgun-gothic','pretendard'])assert.ok(html.includes(`value="${policy}"`));
- assert.match(js,/pptxOptions:\{fontPolicy:/);assert.match(js,/allowPartial:\$\('pptx-allow-partial'\)\.checked/);assert.match(js,/설정이 바뀌었습니다/);assert.match(js,/d\.objectName/);assert.ok(!js.includes('innerHTML'));
+ assert.match(js,/pptxOptions:\{fontPolicy:/);assert.match(js,/allowPartial:\$\('pptx-allow-partial'\)\.checked/);assert.match(js,/설정이 바뀌었습니다/);const diagnosticView=await fs.readFile(new URL('../web/html-to-pptx/diagnostic-view.js',import.meta.url),'utf8');assert.match(diagnosticView,/d\.objectName/);assert.ok(!diagnosticView.includes('innerHTML'));assert.ok(!js.includes('innerHTML'));
 });
 
 test('HTTP import applies the selected font and downloads HTML even without preview',async()=>{

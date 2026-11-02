@@ -25,3 +25,8 @@ test('placeholder and preview-unavailable warnings have accurate public wording'
  const placeholder=publicDiagnostic({code:'PPTX_OBJECT_PLACEHOLDER',severity:'warning',reasonKey:'PPTX_OBJECT_UNSUPPORTED',slideNumber:2});assert.match(placeholder.message,/표시 상자/);assert.equal(placeholder.slideNumber,2);
  const preview=publicDiagnostic({code:'PPTX_PREVIEW_UNAVAILABLE',severity:'warning',reasonKey:'PREVIEW_UNAVAILABLE'});assert.match(preview.message,/HTML/);assert.equal(preview.severity,'warning');
 });
+test('preview bounds expose only validated normalized rectangles',()=>{
+ const base={code:'PPTX_OBJECT_PLACEHOLDER',severity:'warning',reasonKey:'PPTX_SHAPE_GRADIENT_UNSUPPORTED'};
+ assert.deepEqual(publicDiagnostic({...base,bounds:{x:.1,y:.2,w:.3,h:.4}}).bounds,{x:.1,y:.2,w:.3,h:.4});
+ for(const bounds of [{x:-1,y:0,w:1,h:1},{x:0,y:0,w:Infinity,h:1},{x:0,y:0,w:2,h:1},{x:0,y:0,w:0,h:1},{x:'0',y:0,w:1,h:1}])assert.equal(publicDiagnostic({...base,bounds}).bounds,undefined);
+});

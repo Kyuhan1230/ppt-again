@@ -1,14 +1,109 @@
-<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PPT, Again? · HTML과 PPT 사이에서 이어서 작업하세요</title><link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script></head><body data-phase="idle">
-<header class="app-header"><a href="/" class="brand"><span class="mark">H<span>↔</span>P</span> PPT, Again?</a><span>내 컴퓨터에서 변환</span></header>
-<main><div class="intro"><p class="eyebrow">HTML ↔ POWERPOINT</p><h1>슬라이드를 원하는 형식으로 바꿔보세요.</h1><p>HTML을 편집 가능한 PPT로, PPT를 HTML로 변환합니다.</p></div>
-<div class="workspace"><section class="input-panel" aria-labelledby="input-heading"><h2 id="input-heading">파일 선택</h2>
-<form id="analyze-form"><label class="file-area" for="html-file"><span class="file-glyph" aria-hidden="true">↗</span><strong id="file-label">파일을 여기에 놓거나 선택하세요</strong><span>HTML 최대 16MiB · PPTX 최대 64MiB · 선택하면 자동으로 분석합니다</span><input id="html-file" name="html-file" type="file" accept=".html,.htm,.pptx,text/html,application/vnd.openxmlformats-officedocument.presentationml.presentation" required></label>
-<p id="conversion-direction" class="help">파일 형식에 맞춰 변환 방향을 정합니다.</p><details id="html-options"><summary>이미지·글꼴 추가 또는 장표 영역 지정</summary><label for="assets">함께 사용할 이미지·글꼴 파일</label><input id="assets" type="file" multiple><label for="asset-folder">폴더로 제공하기</label><input id="asset-folder" type="file" webkitdirectory multiple><p class="help">HTML에서 참조하는 상대 경로를 유지해 선택하세요.</p><label for="selector">장표 선택자 (선택 사항)</label><input id="selector" placeholder="예: .slide" spellcheck="false"><p class="help">보통은 비워 두세요. 자동으로 찾지 못한 경우에만 지정합니다.</p></details>
-<fieldset id="pptx-options" hidden><legend>PPTX → HTML 설정</legend><label for="pptx-font-policy">HTML 기본 글꼴</label><select id="pptx-font-policy"><option value="original">원본 글꼴 유지</option><option value="malgun-gothic">맑은 고딕으로 변경</option><option value="pretendard">Pretendard로 변경</option></select><p class="help">변경하면 텍스트·표·차트 글꼴을 선택한 글꼴로 통일합니다. 글꼴 파일을 새로 포함하지 않으며, 보는 PC에 해당 글꼴이 없으면 대체 표시됩니다. 줄바꿈·배치를 확인하세요.</p><label><input id="pptx-allow-partial" type="checkbox" checked> 지원되는 내용은 변환하고 미지원 부분은 표시하기</label><p class="help">미지원 내용은 경고와 표시로 남깁니다. 손상되거나 안전하지 않은 파일은 변환하지 않습니다.</p></fieldset>
-<button type="submit" id="analyze-button" disabled>다시 분석</button><p class="privacy">원본 파일은 수정하지 않습니다. 변환은 이 컴퓨터에서 진행합니다.</p></form>
-<div class="output-area"><h2>변환 결과</h2><p id="output-help" class="help">확인이 필요한 항목은 분석 결과에 표시합니다.</p><button type="button" id="download-button" disabled>변환 파일 다운로드</button><button type="button" id="partial-download-button" hidden disabled>변환 가능한 장표만 받기</button><p id="partial-download-note" class="help" hidden></p><section id="diagnostics" hidden aria-labelledby="diagnostic-heading"><h3 id="diagnostic-heading">확인이 필요한 항목</h3><ul id="diagnostic-list"></ul></section><div class="job-actions"><button type="button" id="cancel-button" disabled>작업 취소</button><button type="button" id="delete-button" disabled>작업 삭제</button></div><p class="retention help">작업은 30분 뒤 만료됩니다. 삭제하면 앱에 보관된 입력과 결과가 정리됩니다.</p></div></section>
-<section class="result-panel" aria-labelledby="result-heading"><div class="result-top"><div><h2 id="result-heading">장표 미리보기</h2><p id="status-message" role="status" aria-live="polite">파일을 선택하면 장표를 확인합니다.</p></div><span id="status-badge" data-state="idle">파일 선택 대기</span></div>
-<p id="duration-note" class="duration-note" role="status" aria-live="polite" hidden></p><div id="empty-preview" class="empty-preview"><div class="slide-outline" aria-hidden="true">HTML <b>↔</b> PPT</div><p>장표를 준비하고 있습니다.</p></div>
-<div id="preview-area" hidden><div class="slide-tools"><span id="slide-count"></span><span id="object-count"></span></div><div class="preview-stage"><img id="preview-image" alt="변환 장표 미리보기"></div><nav id="slide-list" aria-label="장표 선택"></nav><p id="slide-detail" class="help"></p></div>
-<p id="quality-note" class="quality-note">함께 제공한 지원 정적 TTF·WOFF2 글꼴은 PPT에 포함합니다. 포함되지 않은 글꼴은 사용할 컴퓨터에 설치해야 합니다.</p></section></div></main>
-</body></html>
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PPT, Again? · HTML과 PPT 사이에서 이어서 작업하세요</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body data-phase="idle">
+<header class="app-header">
+  <a href="/" class="brand"><span class="mark" aria-hidden="true">H<span>↔</span>P</span> PPT, Again?</a>
+  <span class="local-label">로컬 변환</span>
+</header>
+<main>
+  <div class="intro">
+    <p class="eyebrow">HTML ↔ POWERPOINT</p>
+    <h1>슬라이드, 이어서 편집하세요.</h1>
+    <p>HTML을 PPT로, PPT를 HTML로.</p>
+  </div>
+  <div class="workspace">
+    <section class="input-panel" aria-labelledby="input-heading">
+      <h2 id="input-heading">파일과 설정</h2>
+      <form id="analyze-form">
+        <label class="file-area" for="html-file">
+          <span class="file-glyph" aria-hidden="true">↗</span>
+          <strong id="file-label">파일을 놓거나 선택하세요</strong>
+          <span class="upload-hint">선택하면 자동으로 분석합니다</span>
+          <input id="html-file" name="html-file" type="file" accept=".html,.htm,.pptx,text/html,application/vnd.openxmlformats-officedocument.presentationml.presentation" required>
+        </label>
+        <p class="file-limits">PPTX 최대 64MiB <span aria-hidden="true">·</span> HTML 최대 16MiB</p>
+        <p id="conversion-direction" class="help">파일 형식에 맞춰 변환합니다.</p>
+        <details id="html-options" class="settings-disclosure">
+          <summary>추가 자산 · 고급 설정</summary>
+          <div class="disclosure-content">
+            <label for="assets">이미지·글꼴 파일</label><input id="assets" type="file" multiple>
+            <label for="asset-folder">또는 폴더 선택</label><input id="asset-folder" type="file" webkitdirectory multiple>
+            <p class="help">HTML이 참조하는 상대 경로를 유지하세요.</p>
+            <label for="selector">장표 선택자 <span class="optional">선택</span></label>
+            <input id="selector" placeholder="예: .slide" spellcheck="false">
+            <p class="help">장표를 자동으로 찾지 못할 때만 입력하세요.</p>
+          </div>
+        </details>
+        <fieldset id="pptx-options" hidden>
+          <legend>PPTX → HTML 설정</legend>
+          <label for="pptx-font-policy">HTML 기본 글꼴</label>
+          <select id="pptx-font-policy">
+            <option value="original">원본 글꼴 유지</option>
+            <option value="malgun-gothic">맑은 고딕으로 변경</option>
+            <option value="pretendard">Pretendard로 변경</option>
+          </select>
+          <details class="inline-help">
+            <summary>글꼴을 바꾸면?</summary>
+            <p>텍스트·표·차트 글꼴을 통일합니다. 글꼴 파일은 새로 포함하지 않습니다. 보는 PC에 해당 글꼴이 없으면 다른 글꼴로 표시되며, 줄바꿈과 배치가 달라질 수 있습니다.</p>
+          </details>
+          <label class="check-option" for="pptx-allow-partial">
+            <input id="pptx-allow-partial" type="checkbox" checked>
+            <span>지원되는 내용 먼저 가져오기</span>
+          </label>
+          <p class="important-note">미지원 내용은 표시 상자로 남습니다.</p>
+          <details class="inline-help">
+            <summary>부분 변환 범위</summary>
+            <p>변환할 수 있는 내용은 유지하고, 옮기지 못한 객체와 배경은 표시와 진단으로 남깁니다. 손상되거나 안전하지 않은 파일은 변환하지 않습니다.</p>
+          </details>
+        </fieldset>
+        <button type="submit" id="analyze-button" disabled>다시 분석</button>
+        <p class="privacy">원본 파일은 변경하지 않습니다.</p>
+      </form>
+      <div class="output-area">
+        <h2>다운로드</h2>
+        <p id="output-help" class="help">지원 제한은 결과에서 확인하세요.</p>
+        <button type="button" id="download-button" disabled>변환 파일 다운로드</button>
+        <button type="button" id="partial-download-button" hidden disabled>변환 가능한 장표만 받기</button>
+        <p id="partial-download-note" class="important-note" hidden></p>
+        <div class="job-actions">
+          <button type="button" id="cancel-button" disabled>취소</button>
+          <button type="button" id="delete-button" disabled>작업 삭제</button>
+        </div>
+        <details class="inline-help retention">
+          <summary>파일 보관 안내</summary>
+          <p>작업은 30분 뒤 만료됩니다. 작업 삭제 시 앱에 보관된 입력과 결과가 정리됩니다.</p>
+        </details>
+      </div>
+    </section>
+    <section class="result-panel" aria-labelledby="result-heading">
+      <div class="result-top">
+        <div><h2 id="result-heading">미리보기와 검토</h2><p id="status-message" role="status" aria-live="polite">파일을 선택하면 장표를 확인합니다.</p></div>
+        <span id="status-badge" data-state="idle">파일 선택 대기</span>
+      </div>
+      <p id="duration-note" class="duration-note" role="status" aria-live="polite" hidden></p>
+      <div id="empty-preview" class="empty-preview"><div class="slide-outline" aria-hidden="true">HTML <b>↔</b> PPT</div><p>파일을 분석하면 미리보기가 표시됩니다.</p></div>
+      <div id="preview-area" hidden>
+        <div class="slide-tools"><span id="slide-count"></span><span id="object-count"></span></div>
+        <div class="preview-stage"><div id="preview-image-wrap"><img id="preview-image" alt="HTML 장표 미리보기"><span id="problem-overlay" hidden aria-hidden="true"></span></div></div>
+        <p id="problem-location-note" class="help" role="status" hidden></p>
+        <nav id="slide-list" aria-label="장표 선택"></nav>
+        <p id="slide-detail" class="help"></p>
+      </div>
+      <p id="quality-note" class="quality-note">HTML 미리보기입니다. 원본 PowerPoint 화면은 아닙니다.</p>
+      <section id="diagnostics" hidden aria-labelledby="diagnostic-heading">
+        <div class="diagnostic-heading-row"><h3 id="diagnostic-heading">확인할 내용</h3><span class="meta-label">원인별로 묶어 표시</span></div>
+        <div id="diagnostic-summary" aria-live="polite"></div>
+        <ul id="diagnostic-list"></ul>
+      </section>
+    </section>
+  </div>
+</main>
+</body>
+</html>
