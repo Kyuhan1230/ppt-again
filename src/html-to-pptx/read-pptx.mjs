@@ -21,6 +21,38 @@ const P='http://schemas.openxmlformats.org/presentationml/2006/main',R='http://s
 const REL='http://schemas.openxmlformats.org/package/2006/relationships',CT='http://schemas.openxmlformats.org/package/2006/content-types';
 const C='http://schemas.openxmlformats.org/drawingml/2006/chart',A='http://schemas.openxmlformats.org/drawingml/2006/main';
 
+// Resolve only solid, unmodified theme backgrounds. More complex theme fills
+// stay unsupported rather than being replaced with a guessed color.
+function themeBackground(ref,theme,master,overrides){
+  if(theme.documentElement?.namespaceURI!==A||theme.documentElement.localName!=='theme')return null;
+  const fillList=all(theme,'bgFillStyleLst')[0],index=num(ref,'idx')-1001;
+  if(!Number.isInteger(index)||index<0||!fillList)return null;
+  const fill=elements(fillList)[index];
+  if(fill?.namespaceURI!==A||fill.localName!=='solidFill'||elements(fill).length!==1)return null;
+  let mapping=all(master,'clrMap')[0];
+  for(const doc of overrides){
+    const override=all(doc,'clrMapOvr')[0];if(!override)continue;
+    const chosen=elements(override)[0];
+    if(chosen?.localName==='overrideClrMapping')mapping=chosen;
+    else if(chosen?.localName!=='masterClrMapping')return null;
+    break;
+  }
+  const scheme=all(theme,'clrScheme')[0];
+  const resolve=(node,placeholder=null)=>{
+    if(!node||node.namespaceURI!==A||elements(node).length)return null;
+    if(node.localName==='srgbClr'||node.localName==='sysClr'){
+      const hex=attr(node,node.localName==='sysClr'?'lastClr':'val','');
+      return /^[a-f\d]{6}$/i.test(hex)?`#${hex}`:null;
+    }
+    if(node.localName!=='schemeClr')return null;
+    let key=attr(node,'val');if(key==='phClr')return placeholder;
+    key=attr(mapping,key,key);const slot=child(scheme,key);
+    return slot&&elements(slot).length===1?resolve(elements(slot)[0]):null;
+  };
+  const colors=elements(ref);if(colors.length!==1)return null;
+  return resolve(elements(fill)[0],resolve(colors[0]));
+}
+
 // Strict subset reader. No Office process, document code, network or disk extraction.
 export async function readPptx(bytes){
   const diagnostics=[],model={version:1,sourceDigest:sha256(bytes??''),slides:[],assets:[]};
@@ -127,9 +159,18 @@ export async function readPptx(bytes){
         const alpha=num(child(c,'alpha'),'val',100000)/100000;
         return alpha===1?`#${hex}`:`rgba(${parseInt(hex.slice(0,2),16)},${parseInt(hex.slice(2,4),16)},${parseInt(hex.slice(4,6),16)},${alpha})`;
       };
-      const bg=all(doc,'bgPr')[0]??[...inherited].map(part=>all(xml(part),'bgPr')[0]).find(Boolean);if(bg)slide.background.color=color(child(bg,'solidFill'),'#ffffff');
-      if(bg&&elements(bg).some(n=>!['solidFill','effectLst'].includes(n.localName)))issue('단색 외의 PPT 배경은 지원하지 않습니다.');
-      if(all(doc,'bgRef').length||!bg&&[...inherited].some(part=>all(xml(part),'bgRef').length))issue('테마 배경은 아직 지원하지 않습니다.');
+      const backgrounds=[doc,...[...inherited].map(part=>xml(part))].map(d=>child(child(d.documentElement,'cSld'),'bg')).filter(Boolean);
+      const bg=child(backgrounds[0],'bgPr'),bgRef=child(backgrounds[0],'bgRef');
+      if(bg){
+        slide.background.color=color(child(bg,'solidFill'),'#ffffff');
+        if(elements(bg).some(n=>!['solidFill','effectLst'].includes(n.localName)))issue('단색 외의 PPT 배경은 지원하지 않습니다.');
+      }else if(bgRef){
+        const master=[...inherited].find(part=>part.startsWith('ppt/slideMasters/'));
+        const theme=master&&[...relationRecords(master).values()].find(r=>r.type===`${R}/theme`)?.target;
+        const layouts=[...inherited].filter(part=>part.startsWith('ppt/slideLayouts/'));
+        const resolved=theme&&parts[theme]?themeBackground(bgRef,xml(theme),xml(master),[doc,...layouts.map(part=>xml(part))]):null;
+        if(resolved)slide.background.color=resolved;else issue('이 테마 배경은 아직 지원하지 않습니다.');
+      }
       const readText=(tx,id)=>{
       const body=child(tx,'bodyPr'),paras=elements(tx).filter(n=>n.localName==='p'),runs=[];
       if(num(body,'rot')!==0||attr(body,'vert','horz')!=='horz'||num(body,'numCol',1)!==1||num(body,'rtlCol')!==0||num(body,'fromWordArt')!==0||child(body,'prstTxWarp')&&attr(child(body,'prstTxWarp'),'prst')!=='textNoShape')issue('회전·세로쓰기·다단·워드아트 텍스트는 아직 지원하지 않습니다.',id);
@@ -147,7 +188,8 @@ export async function readPptx(bytes){
       };
       for(const [pi,p] of paras.entries()){
         const pPr=child(p,'pPr');if(elements(pPr).some(n=>/^bu/.test(n.localName)&&n.localName!=='buNone'))issue('글머리표는 아직 지원하지 않습니다.',id);
-        if(num(pPr,'marL')||num(pPr,'marR')||num(pPr,'indent')||child(pPr,'tabLst')||['spcBef','spcAft'].some(k=>elements(child(pPr,k)).some(n=>num(n,'val')!==0)))issue('문단 들여쓰기·탭·문단 앞뒤 간격은 아직 지원하지 않습니다.',id);
+        if(num(pPr,'marL')||num(pPr,'marR')||num(pPr,'indent')||child(pPr,'tabLst'))issue('문단 들여쓰기·탭은 아직 지원하지 않습니다.',id);
+        if(['spcBef','spcAft'].some(k=>elements(child(pPr,k)).some(n=>num(n,'val')!==0)))diagnostics.push(diagnostic('PARAGRAPH_SPACING_APPROXIMATED','문단 앞뒤 간격은 그대로 옮기지 못했습니다.',{slideId:slide.id,nodeId:id},'warning'));
         if(pi&&attr(pPr,'algn','l')!==attr(child(paras[0],'pPr'),'algn','l'))issue('서로 다른 문단 정렬은 아직 지원하지 않습니다.',id);
         if(pi)runs.push({text:'\n',style:runs.at(-1)?.style??runStyle(child(p,'endParaRPr'),pPr)});
         for(const r of elements(p))if(['r','fld','br'].includes(r.localName))runs.push({text:r.localName==='br'?'\n':all(r,'t').map(t=>t.textContent).join(''),style:runStyle(child(r,'rPr'),pPr)});
@@ -206,12 +248,20 @@ export async function readPptx(bytes){
              (child(objectStyle,'lnRef')&&!child(pr,'ln'))||num(child(objectStyle,'effectRef'),'idx')!==0)issue('상속된 도형 채움·선·효과는 아직 지원하지 않습니다.',id);
           if(object.localName==='pic'){
             node.kind='image';const blip=all(object,'blip')[0],target=rels.get(attr(blip,'r:embed'));
-            if(all(object,'srcRect').some(n=>[...n.attributes].some(a=>Number(a.value)!==0)))issue('잘라낸 그림은 아직 지원하지 않습니다.',id);
+            const blipFill=child(object,'blipFill'),rect=child(blipFill,'srcRect');
+            let crop;
+            if(rect){
+              crop=Object.fromEntries([['left','l'],['top','t'],['right','r'],['bottom','b']].map(([key,name])=>[key,num(rect,name)]));
+              const fillRect=child(child(blipFill,'stretch'),'fillRect');
+              const valid=Object.values(crop).every(v=>Number.isInteger(v)&&v>=0&&v<100000)&&crop.left+crop.right<100000&&crop.top+crop.bottom<100000;
+              if(!valid||!child(blipFill,'stretch')||fillRect&&['l','t','r','b'].some(side=>num(fillRect,side)!==0))issue('이 그림의 자르기 또는 채우기는 지원하지 않습니다.',id);
+              if(!Object.values(crop).some(Boolean))crop=undefined;
+            }
             if(!target||!parts[target]){issue('내장 그림 자산이 없습니다.',id);continue;}
             const mime=mimeByExt[path.posix.extname(target).toLowerCase()];if(!mime){issue('이 그림 형식은 지원하지 않습니다.',id);continue;}
             const asset=resolveAsset('image'+path.posix.extname(target),[{path:'image'+path.posix.extname(target),mime,bytes:parts[target]}]);
             if(!model.assets.some(a=>a.id===asset.id))model.assets.push(asset);
-            node.content={assetId:asset.id};node.style.opacity=num(child(blip,'alphaModFix'),'amt',100000)/100000;
+            node.content={assetId:asset.id,...(crop?{crop}:{})};node.style.opacity=num(child(blip,'alphaModFix'),'amt',100000)/100000;
           }else{
             const shape=attr(child(pr,'prstGeom'),'prst'),line=child(pr,'ln'),tx=child(object,'txBody');
             Object.assign(node.style,{svgGeometry:true,shape:shape==='ellipse'?'ellipse':'rect',fill:color(child(pr,'solidFill')),stroke:color(child(line,'solidFill')),strokeWidth:child(line,'noFill')?0:px(num(line,'w')),radius:shape==='roundRect'?Math.min(box.w,box.h)*0.16667:0});

@@ -5,12 +5,12 @@ const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const nonempty = v => typeof v === 'string' && v.trim().length > 0;
 const digest = v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
 const kinds = new Set(['text', 'shape', 'line', 'image', 'group', 'table', 'chart']);
-const codes = new Set(['INPUT_INVALID', 'SLIDE_ROOT_REQUIRED', 'ASSET_MISSING', 'FONT_UNAVAILABLE', 'FONT_SUBSTITUTED',
+const codes = new Set(['INPUT_INVALID', 'SLIDE_ROOT_REQUIRED', 'ASSET_MISSING', 'FONT_UNAVAILABLE', 'FONT_SUBSTITUTED', 'FONT_PREVIEW_SUBSTITUTED',
   'FONT_INVALID','FONT_FORMAT_UNSUPPORTED','FONT_VARIABLE_UNSUPPORTED','FONT_STYLE_UNSUPPORTED','FONT_STYLE_MISMATCH','FONT_GLYPH_MISSING',
   'FONT_SOURCE_UNSUPPORTED','FONT_SUBSET_UNSUPPORTED','FONT_ASSET_LIMIT','FONT_EMBEDDING_RESTRICTED','FONT_EMBEDDING_INVALID','FONT_EMBEDDING_UNSUPPORTED',
   'FONT_PREVIEW_ONLY','FONT_BITMAP_ONLY','FONT_SUBSETTING_RESTRICTED','FONT_NOT_PORTABLE',
   'CHART_DATA_REQUIRED','CHART_DATA_MISMATCH','LIMIT_EXCEEDED',
-  'TABLE_LAYOUT_APPROXIMATED', 'SVG_TEXT_APPROXIMATED', 'SCRIPT_REQUIRED', 'UNSUPPORTED_OBJECT', 'SVG_TEXT_NOT_EDITABLE', 'RENDER_INCOMPLETE', 'EXPORT_FAILED']);
+  'TABLE_LAYOUT_APPROXIMATED', 'PARAGRAPH_SPACING_APPROXIMATED', 'SVG_TEXT_APPROXIMATED', 'SCRIPT_REQUIRED', 'UNSUPPORTED_OBJECT', 'SVG_TEXT_NOT_EDITABLE', 'RENDER_INCOMPLETE', 'EXPORT_FAILED']);
 
 export function diagnostic(code, message, location = {}, severity = 'error') {
   return {code, severity, slideId: location.slideId ?? null, nodeId: location.nodeId ?? null,
@@ -90,7 +90,13 @@ export function validateModel(value) {
         check(record(n.sourceRef) && n.sourceRef.slideId === slide.id && (nonempty(n.sourceRef.elementId) || nonempty(n.sourceRef.path)), `${np}.sourceRef`, 'Expected source location on this slide');
         check(n.parentId === null || nonempty(n.parentId), `${np}.parentId`, 'Expected parent or null');
         if (n.kind === 'text') check(typeof n.content?.text === 'string', `${np}.content.text`, 'Expected text');
-        if (n.kind === 'image') check(assetIds.has(n.content?.assetId), `${np}.content.assetId`, 'Unknown asset reference');
+        if (n.kind === 'image') {
+          check(assetIds.has(n.content?.assetId), `${np}.content.assetId`, 'Unknown asset reference');
+          if(n.content?.crop!==undefined){
+            const crop=n.content.crop;
+            check(record(crop)&&['left','top','right','bottom'].every(key=>Number.isInteger(crop[key])&&crop[key]>=0&&crop[key]<100000)&&crop.left+crop.right<100000&&crop.top+crop.bottom<100000,`${np}.content.crop`,'Invalid image crop');
+          }
+        }
         if(n.kind==='table'){
           check(d.version===2,`${np}.kind`,'Tables require model version 2');
           const table=validateTable(n.content);for(const error of table.errors)check(false,`${np}.content.${error.path}`,error.message);
