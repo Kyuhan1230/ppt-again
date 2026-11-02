@@ -42,21 +42,27 @@ process.on('message',async message=>{
     if(message.operation==='analyze-html'){
       result=await analyzeHtml(message.input);
     }else if(message.operation==='analyze-pptx'){
-      const parsed=await readPptx(message.input);checkModel(parsed.model);
-      const input={profile:'pptx-v1',source:{sha256:sha256(message.input)}};
+      const bytes=message.input instanceof Uint8Array?message.input:message.input.bytes,options=message.input instanceof Uint8Array?{}:message.input.options;
+      const parsed=await readPptx(bytes,options);checkModel(parsed.model);
+      const input={profile:'pptx-v1',source:{sha256:sha256(bytes)},options};
       let measured={model:parsed.model,measurements:[],environment:{},diagnostics:[...parsed.diagnostics],previews:[]};
       if(parsed.status==='parsed'){
         const generated=exportHtml(parsed.model);measured.diagnostics.push(...generated.diagnostics);
         if(generated.status==='generated'){
-          const preview=await analyzeHtml({html:generated.html});
-          if(cancelled)return;
-          // Browser measurement is preview evidence, not a replacement for the
-          // current PPT's coordinates, content, font declarations or assets.
-          // A missing local font affects the preview, but the HTML can retain
-          // the original font name and be used on another machine.
-          const previewDiagnostics=preview.measured.diagnostics.map(d=>d.code==='FONT_UNAVAILABLE'&&d.severity==='error'?{...d,code:'FONT_PREVIEW_SUBSTITUTED',severity:'warning'}:d);
-          const diagnostics=[...measured.diagnostics,...previewDiagnostics];
-          measured={...preview.measured,model:parsed.model,diagnostics:[...new Map(diagnostics.map(d=>[JSON.stringify(d),d])).values()]};
+          // Exported HTML comes from the validated current PPT model. A preview
+          // renderer is optional for this direction, never for HTML→PPTX.
+          try{
+            const preview=await analyzeHtml({html:generated.html});
+            if(cancelled)return;
+            const fatal=preview.measured.diagnostics.find(d=>d.severity==='error'&&['INPUT_INVALID','INPUT_LIMIT','LIMIT_EXCEEDED'].includes(d.code));
+            if(fatal)throw Object.assign(new Error('INPUT_LIMIT'),{code:'INPUT_LIMIT'});
+            const previewDiagnostics=preview.measured.diagnostics.map(d=>d.severity!=='error'?d:d.code==='FONT_UNAVAILABLE'?{...d,code:'FONT_PREVIEW_SUBSTITUTED',severity:'warning'}:{code:'PPTX_PREVIEW_UNAVAILABLE',severity:'warning',reasonKey:'PREVIEW_UNAVAILABLE',slideId:d.slideId??null,message:'HTML은 만들었지만 미리보기를 확인하지 못했습니다.'});
+            const diagnostics=[...measured.diagnostics,...previewDiagnostics];
+            measured={...preview.measured,model:parsed.model,diagnostics:[...new Map(diagnostics.map(d=>[JSON.stringify(d),d])).values()]};
+          }catch(error){
+            if(cancelled||['INPUT_INVALID','INPUT_LIMIT','LIMIT_EXCEEDED','JOB_CANCELLED','JOB_MEMORY_LIMIT','JOB_TIMEOUT'].includes(error.code))throw error;
+            measured.diagnostics.push({code:'PPTX_PREVIEW_UNAVAILABLE',severity:'warning',reasonKey:'PREVIEW_UNAVAILABLE',message:'HTML은 만들었지만 미리보기를 확인하지 못했습니다.'});
+          }
         }
       }
       result={input,measured};
@@ -64,7 +70,7 @@ process.on('message',async message=>{
       checkModel(message.input.model);result=await exportPptx(message.input,{fontEmbedding:message.input.model.fonts?.length?'auto':'off'});
       limit(result.pptxBytes?.length>64*1024*1024);
     }else if(message.operation==='read-pptx'){
-      result=await readPptx(message.input);checkModel(result.model);
+      result=await readPptx(message.input instanceof Uint8Array?message.input:message.input.bytes,message.input instanceof Uint8Array?{}:message.input.options);checkModel(result.model);
     }else if(message.operation==='export-html'){
       checkModel(message.input);result=exportHtml(message.input);
     }else throw new Error('INPUT_INVALID');

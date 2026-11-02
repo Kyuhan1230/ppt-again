@@ -21,9 +21,11 @@ function validateInput(operation,input){
       if(asset.bytes.byteLength>16*MiB||(total+=asset.bytes.byteLength)>64*MiB)throw failure('INPUT_LIMIT',413);
     }
   }else if(operation==='read-pptx'||operation==='analyze-pptx'){
-    if(!(input instanceof Uint8Array))throw failure('INPUT_INVALID');
-    if(input.byteLength>64*MiB)throw failure('INPUT_LIMIT',413);
-    if(operation==='analyze-pptx'&&(input.byteLength<22||input[0]!==0x50||input[1]!==0x4b||input[2]!==3||input[3]!==4))throw failure('INPUT_INVALID');
+    const bytes=input instanceof Uint8Array?input:input?.bytes,options=input instanceof Uint8Array?{}:input?.options;
+    if(!(bytes instanceof Uint8Array)||!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(k=>!['fontPolicy','allowPartial'].includes(k))||options.fontPolicy!==undefined&&!['original','malgun-gothic','pretendard'].includes(options.fontPolicy)||options.allowPartial!==undefined&&typeof options.allowPartial!=='boolean')throw failure('INPUT_INVALID');
+    if(!(input instanceof Uint8Array)&&Object.keys(input).some(k=>!['bytes','options'].includes(k)))throw failure('INPUT_INVALID');
+    if(bytes.byteLength>64*MiB)throw failure('INPUT_LIMIT',413);
+    if(operation==='analyze-pptx'&&(bytes.byteLength<22||bytes[0]!==0x50||bytes[1]!==0x4b||bytes[2]!==3||bytes[3]!==4))throw failure('INPUT_INVALID');
   }else{
     const model=operation==='export-pptx'?input?.model:input;
     if(!model||!Array.isArray(model.slides))throw failure('INPUT_INVALID');
