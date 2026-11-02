@@ -366,7 +366,11 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
         const oldNodes=new Map(slide.nodes.map(n=>[n.id,n]));slide.nodes=slide.nodes.filter(n=>!bad.has(n.id));
         const groups=new Map();for(const d of recoverable){const key=d.nodeId??'slide-background';if(!groups.has(key))groups.set(key,[]);groups.get(key).push(d);}
         let offset=0;for(const [key,items] of groups){
-          const old=oldNodes.get(key),candidate=old?.boxCssPx;
+          const old=oldNodes.get(key),bounds=objectContexts.get(`${slide.id}:${key}`)?.bounds;
+          // Unsupported charts/tables may have no model node. Reuse only their
+          // already-validated native coordinates, never an invented location.
+          const hasBounds=bounds&&['x','y','w','h'].every(k=>Number.isFinite(bounds[k]))&&bounds.x>=0&&bounds.y>=0&&bounds.w>0&&bounds.h>0&&bounds.x+bounds.w<=1&&bounds.y+bounds.h<=1;
+          const candidate=old?.boxCssPx??(hasBounds?{x:bounds.x*slide.widthCssPx,y:bounds.y*slide.heightCssPx,w:bounds.w*slide.widthCssPx,h:bounds.h*slide.heightCssPx}:null);
           const valid=candidate&&Object.values(candidate).every(Number.isFinite)&&candidate.w>0&&candidate.h>0;
           const box=valid?{...candidate}:{x:16,y:16+offset,w:Math.max(40,slide.widthCssPx-32),h:72};offset+=80;
           const text='[변환하지 못한 '+(items[0].objectType==='background'?'배경/효과':'객체')+'] '+items.map(d=>d.message).filter((x,i,a)=>a.indexOf(x)===i).join(' ');

@@ -29,3 +29,11 @@ test('partial export remains explicit and actual preview uses normal success wor
  const partial=messages({...job,slides:[{previewUrl:null}],partialExportAvailable:true});assert.match(partial.empty,/일부 장표는 다운로드/);
  const success=messages({...job,status:'analyzed',slides:[{previewUrl:'actual.png'}],slideCount:1,exportAvailable:true});assert.match(success.status,/1장을 확인/);assert.doesNotMatch(success.status,/실패|중단/);
 });
+test('quality note is hidden until a real preview exists and resets on each new input',()=>{
+ assert.match(js,/const \$=id=>document.getElementById\(id\);\s*\$\('quality-note'\)\.hidden=true/);
+ assert.match(js,/\$\('preview-area'\)\.hidden=!visible;\$\('quality-note'\)\.hidden=!visible/);
+ const hiddenPreviews=[...js.matchAll(/\$\('preview-area'\)\.hidden=true;/g)];
+ assert.ok(hiddenPreviews.length>=3);
+ for(const match of hiddenPreviews)assert.ok(js.slice(match.index+match[0].length).startsWith("$('quality-note').hidden=true;"));
+ assert.match(js,/if\(!slide\?\.previewUrl\)return;\s*\$\('quality-note'\)\.hidden=false/);
+});

@@ -53,3 +53,10 @@ test('blocking and recoverable diagnostics never merge or hide a blocking generi
  assert.ok(p.categories.slice(0,2).every(c=>c.blocking));
  assert.equal(p.categories[2].blocking,false);
 });
+test('parser-prefixed inherited and theme reason keys have precise display labels',()=>{
+ for(const [reasonKey,title] of [
+  ['PPTX_INHERITED_TEXT_UNRESOLVED','상속 텍스트 해석 실패'],
+  ['PPTX_THEME_COLOR_UNSUPPORTED','테마 색상 해석 실패'],
+  ['PPTX_INHERITED_SHAPE_STYLE_UNSUPPORTED','상속 도형 서식']
+ ])assert.equal(projectDiagnostics([{...make(0),reasonKey}]).categories[0].title,title);
+});
