@@ -263,8 +263,18 @@ export async function readPptx(bytes){
             if(!model.assets.some(a=>a.id===asset.id))model.assets.push(asset);
             node.content={assetId:asset.id,...(crop?{crop}:{})};node.style.opacity=num(child(blip,'alphaModFix'),'amt',100000)/100000;
           }else{
-            const shape=attr(child(pr,'prstGeom'),'prst'),line=child(pr,'ln'),tx=child(object,'txBody');
-            Object.assign(node.style,{svgGeometry:true,shape:shape==='ellipse'?'ellipse':'rect',fill:color(child(pr,'solidFill')),stroke:color(child(line,'solidFill')),strokeWidth:child(line,'noFill')?0:px(num(line,'w')),radius:shape==='roundRect'?Math.min(box.w,box.h)*0.16667:0});
+            const geometry=child(pr,'prstGeom'),shape=attr(geometry,'prst'),line=child(pr,'ln'),tx=child(object,'txBody');
+            let radius=0;
+            if(shape==='roundRect'){
+              const adjustments=elements(child(geometry,'avLst'));let value=16667;
+              if(adjustments.length){
+                const guide=adjustments[0],match=/^val\s+(-?\d+)$/.exec(attr(guide,'fmla',''));
+                if(adjustments.length!==1||guide.namespaceURI!==A||guide.localName!=='gd'||attr(guide,'name')!=='adj'||!match||!Number.isSafeInteger(Number(match[1])))issue('둥근 사각형의 이 모서리 조정식은 지원하지 않습니다.',id);
+                else value=Math.max(0,Math.min(50000,Number(match[1])));
+              }
+              radius=Math.min(box.w,box.h)*value/100000;
+            }
+            Object.assign(node.style,{svgGeometry:true,shape:shape==='ellipse'?'ellipse':'rect',fill:color(child(pr,'solidFill')),stroke:color(child(line,'solidFill')),strokeWidth:child(line,'noFill')?0:px(num(line,'w')),radius});
             if(child(line,'prstDash')&&attr(child(line,'prstDash'),'val')!=='solid')issue('점선·화살표 선은 아직 지원하지 않습니다.',id);
             if(elements(line).some(n=>['headEnd','tailEnd'].includes(n.localName)&&attr(n,'type')!=='none'))issue('화살표 선은 아직 지원하지 않습니다.',id);
             if(shape==='line'||object.localName==='cxnSp'){

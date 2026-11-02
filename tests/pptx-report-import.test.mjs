@@ -48,6 +48,27 @@ test('unsupported complex theme backgrounds still stop conversion',async()=>{
   const result=await readPptx(zipSync(parts));assert.equal(result.status,'failed');assert.ok(result.diagnostics.some(d=>d.severity==='error'));
 });
 
+test('rounded rectangles keep their explicit corner radius through HTML and PPTX',async()=>{
+  const ppt=new PptxGenJS();ppt.layout='LAYOUT_WIDE';const slide=ppt.addSlide();slide.background={color:'FFFFFF'};
+  slide.addShape(ppt.ShapeType.roundRect,{x:1,y:1,w:4,h:2,rectRadius:.05,fill:{color:'225588'},line:{transparency:100},objectName:'rounded'});
+  const original=new Uint8Array(await ppt.write({outputType:'uint8array'})),read=await readPptx(original);
+  assert.equal(read.status,'parsed',JSON.stringify(read.diagnostics));
+  const rounded=read.model.slides[0].nodes.find(n=>n.id==='rounded');assert.ok(Math.abs(rounded.style.radius-4.8)<.01);
+  const html=exportHtml(read.model).html;assert.match(html,/border-radius:4\.8px/);
+  const measured=await measureInput(await readInput({html}),runtime),output=await exportPptx(measured);
+  assert.equal(output.status,'generated',JSON.stringify(output.diagnostics));
+  const resultXml=strFromU8(unzipSync(output.pptxBytes)['ppt/slides/slide1.xml']);
+  assert.match(resultXml,/<a:gd name="adj" fmla="val 2500"\s*\/>/);
+});
+
+test('unsupported rounded rectangle adjustment formulas cannot silently change the shape',async()=>{
+  const ppt=new PptxGenJS();const slide=ppt.addSlide();slide.background={color:'FFFFFF'};
+  slide.addShape(ppt.ShapeType.roundRect,{x:1,y:1,w:4,h:2,rectRadius:.05,fill:{color:'225588'},line:{transparency:100}});
+  const parts=unzipSync(new Uint8Array(await ppt.write({outputType:'uint8array'})));
+  update(parts,'ppt/slides/slide1.xml',xml=>xml.replace('fmla="val 2500"','fmla="*/ 2500 2 1"'));
+  const result=await readPptx(zipSync(parts));assert.equal(result.status,'failed');assert.ok(result.diagnostics.some(d=>d.severity==='error'));
+});
+
 test('paragraph spacing is reported as an approximation while current text remains editable',async()=>{
   const parts=await fixture();
   update(parts,'ppt/slides/slide1.xml',xml=>xml.replace(/<a:pPr([^>]*)>/,'<a:pPr$1><a:spcAft><a:spcPts val="500"/></a:spcAft>'));
