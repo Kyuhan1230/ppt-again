@@ -29,7 +29,6 @@
           <input id="html-file" name="html-file" type="file" accept=".html,.htm,.pptx,text/html,application/vnd.openxmlformats-officedocument.presentationml.presentation" required>
         </label>
         <p class="file-limits">PPTX 최대 64MiB <span aria-hidden="true">·</span> HTML 최대 16MiB</p>
-        <p id="conversion-direction" class="help">파일 형식에 맞춰 변환합니다.</p>
         <details id="html-options" class="settings-disclosure">
           <summary>추가 자산 · 고급 설정</summary>
           <div class="disclosure-content">
@@ -41,8 +40,7 @@
             <p class="help">장표를 자동으로 찾지 못할 때만 입력하세요.</p>
           </div>
         </details>
-        <fieldset id="pptx-options" hidden>
-          <legend>PPTX → HTML 설정</legend>
+        <fieldset id="pptx-options" aria-label="PPTX 가져오기 옵션" hidden>
           <label for="pptx-font-policy">HTML 기본 글꼴</label>
           <select id="pptx-font-policy">
             <option value="original">원본 글꼴 유지</option>

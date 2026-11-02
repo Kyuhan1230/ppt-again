@@ -22,14 +22,13 @@ const targetLabel=()=>targetType()==='html'?'HTML':'PPT';
 const downloadLabel=()=>sourceType($('html-file').files[0])?(targetType()==='html'?'HTML 다운로드':'편집 가능한 PPT 다운로드'):'변환 파일 다운로드';
 function describeDirection(){
   const source=sourceType($('html-file').files[0]);$('html-options').hidden=source==='pptx';$('pptx-options').hidden=source!=='pptx';for(const id of ['assets','asset-folder','selector'])$(id).disabled=source==='pptx';
-  $('conversion-direction').textContent=source==='pptx'?'PPTX → HTML · 현재 수정 내용을 읽습니다.':source==='html'?'HTML → PPTX · 여러 장을 한 PPT로 묶습니다.':'파일 형식에 맞춰 변환 방향을 정합니다.';
   $('output-help').textContent=source==='pptx'?'지원되는 현재 글자·도형·표·차트를 HTML로 저장합니다. 복잡한 서식과 미지원 객체는 분석에서 알려드립니다.':'지원되는 글자·도형·표·차트를 PowerPoint에서 수정할 수 있습니다. 확인이 필요한 항목은 분석 결과에 표시합니다.';
   $('quality-note').textContent=source==='pptx'?'이 미리보기는 변환된 HTML입니다. 원본 PowerPoint 화면과 차이가 있을 수 있습니다.':'이 미리보기는 입력 HTML입니다. 함께 제공한 지원 정적 TTF·WOFF2 글꼴은 PPT에 포함합니다. 포함되지 않은 글꼴은 사용할 컴퓨터에 설치해야 합니다.';
 }
 function status(state,message){document.body.dataset.phase=state;$('status-badge').dataset.state=state;$('status-badge').textContent=labels[state];$('status-message').textContent=message;}
 function clearDownload(){$('download-button').disabled=true;$('download-button').hidden=false;$('download-button').textContent=downloadLabel();$('partial-download-button').hidden=true;$('partial-download-button').disabled=true;$('partial-download-note').hidden=true;}
 function jobActions(){$('cancel-button').disabled=!busy;$('delete-button').disabled=!currentJob||busy;}
-function reset(){revision++;controller?.abort();if(currentJob)void apiPost(`/api/jobs/${currentJob.id}`,undefined,undefined,'DELETE').catch(()=>{});currentJob=null;busy=false;durationNotice(null);jobActions();const file=$('html-file').files[0],selection=selectedFileState(file),type=selection.type;$('analyze-button').disabled=!selection.valid;$('analyze-button').textContent='다시 분석';describeDirection();clearDownload();$('preview-area').hidden=true;$('empty-preview').hidden=false;$('diagnostics').hidden=true;$('diagnostic-list').replaceChildren();$('preview-image').removeAttribute('src');$('file-label').textContent=file?.name??'파일을 여기에 놓거나 선택하세요';status(file&&!selection.valid?'failed':selection.valid?'ready':'idle',selection.message);}
+function reset(){revision++;controller?.abort();if(currentJob)void apiPost(`/api/jobs/${currentJob.id}`,undefined,undefined,'DELETE').catch(()=>{});currentJob=null;busy=false;durationNotice(null);jobActions();const file=$('html-file').files[0],selection=selectedFileState(file),type=selection.type;$('analyze-button').disabled=!selection.valid;$('analyze-button').textContent='다시 분석';describeDirection();clearDownload();$('preview-area').hidden=true;$('empty-preview').hidden=false;$('empty-preview').querySelector('p').textContent='파일을 분석하면 미리보기가 표시됩니다.';$('diagnostics').hidden=true;$('diagnostic-list').replaceChildren();$('preview-image').removeAttribute('src');$('file-label').textContent=file?.name??'파일을 여기에 놓거나 선택하세요';status(file&&!selection.valid?'failed':selection.valid?'ready':'idle',selection.message);}
 $('html-file').addEventListener('change',()=>{reset();if(selectedFileState($('html-file').files[0]).valid)$('analyze-form').requestSubmit();});
 for(const id of ['assets','asset-folder','selector','pptx-font-policy','pptx-allow-partial'])$(id).addEventListener('change',()=>{reset();if(selectedFileState($('html-file').files[0]).valid)status('ready','설정이 바뀌었습니다. 다시 분석을 눌러 적용하세요.');});
 const dropArea=document.querySelector('.file-area');
@@ -44,9 +43,18 @@ function showSlide(index,diagnostic=null){
  if(diagnostic){if(validBounds(diagnostic.bounds)){const b=diagnostic.bounds;Object.assign(overlay.style,{left:`${b.x*100}%`,top:`${b.y*100}%`,width:`${b.w*100}%`,height:`${b.h*100}%`});overlay.hidden=false;note.textContent=`HTML 미리보기 · ${diagnostic.objectName??'선택한 객체'}의 기록된 위치입니다. 원본 PowerPoint 화면은 아닙니다.`;}else note.textContent='이 객체의 위치 정보는 확인할 수 없습니다. 해당 장표의 HTML 미리보기만 표시합니다.';}
  for(const [i,button]of [...$('slide-list').children].entries())button.setAttribute('aria-current',String(i===index));
 }
+function resultMessages(job){
+  const visible=job.slides.some(s=>s.previewUrl),pptx=job.sourceType==='pptx',failed=job.status==='failed';
+  const inputStopped=pptx&&failed&&!job.slides.length&&!job.exportAvailable&&!job.partialExportAvailable;
+  const htmlAvailable=pptx&&job.exportAvailable;
+  return {
+    status:inputStopped?'입력 분석 중단: HTML과 미리보기 생성 안 됨. 아래 진단에서 원인을 확인하세요.':htmlAvailable&&!visible?'HTML 변환은 가능합니다. 미리보기 렌더링만 실패했습니다.':failed?(pptx?'변환을 막는 항목이 있습니다. 아래 진단에서 해당 장표와 원인을 확인하세요.':'아래 항목을 수정하거나 장표 영역을 지정한 뒤 다시 분석하세요.'):`${job.fileName}에서 장표 ${job.slideCount}장을 확인했습니다.`,
+    empty:inputStopped?'입력 분석 중단: HTML과 미리보기 생성 안 됨. 원본 PowerPoint 이미지는 제공되지 않습니다.':htmlAvailable?'미리보기 렌더링에 실패했지만 HTML은 다운로드할 수 있습니다. 다운로드 후 배치를 확인하세요.':job.partialExportAvailable?'일부 장표는 다운로드할 수 있지만 미리보기는 없습니다. 아래 진단과 제외 장표를 확인하세요.':'미리보기를 만들지 못했습니다. 아래 원인별 진단을 확인하세요. 원본 PowerPoint 이미지는 제공되지 않습니다.'
+  };
+}
 function showResult(job){
   durationNotice(job.slideCount);
-  currentJob=job;const failed=job.status==='failed';status(job.status,failed?(job.sourceType==='pptx'?'아래 지원 제한을 확인하고 PPT를 수정한 뒤 다시 선택해 주세요.':'아래 항목을 수정하거나 장표 영역을 지정한 뒤 다시 분석하세요.'):`${job.fileName}에서 장표 ${job.slideCount}장을 확인했습니다.`);
+  currentJob=job;const messages=resultMessages(job);status(job.status,messages.status);
   describeDirection();$('download-button').textContent=downloadLabel();
   jobActions();
   $('download-button').disabled=!job.exportAvailable;$('download-button').hidden=Boolean(job.partialExportAvailable);
@@ -54,12 +62,12 @@ function showResult(job){
   if(job.partialExportAvailable){$('partial-download-button').textContent=`변환 가능한 ${job.partialSlideCount}장만 받기`;$('partial-download-note').textContent=`전체 ${job.slideCount}장 중 오류가 있는 ${job.excludedSlideNumbers.join(', ')}번 장표는 빠집니다. 원래 순서를 유지합니다.`;}
   $('diagnostic-list').replaceChildren();$('diagnostics').hidden=!job.diagnostics.length;
   renderDiagnostics({document,container:$('diagnostic-list'),summary:$('diagnostic-summary'),diagnostics:job.diagnostics,slides:job.slides,onSelectSlide:(index,diagnostic)=>{showSlide(index,diagnostic);$('preview-area').scrollIntoView({block:'nearest',behavior:'smooth'});}});
-  const visible=job.slides.some(s=>s.previewUrl);$('empty-preview').querySelector('p').textContent=!visible&&job.sourceType==='pptx'&&job.exportAvailable?'미리보기를 만들지 못했지만 HTML은 다운로드할 수 있습니다. 다운로드 후 배치를 확인하세요.':!visible?'미리보기를 만들지 못했습니다. 아래 원인별 진단을 확인하세요. 원본 PowerPoint 이미지는 제공되지 않습니다.':'장표 미리보기';$('preview-area').hidden=!visible;$('empty-preview').hidden=visible;
+  const visible=job.slides.some(s=>s.previewUrl);$('empty-preview').querySelector('p').textContent=visible?'장표 미리보기':messages.empty;$('preview-area').hidden=!visible;$('empty-preview').hidden=visible;
   if(visible){$('slide-count').textContent=`${job.slideCount}장`;$('object-count').textContent=`${targetLabel()}로 저장`;$('slide-list').replaceChildren();job.slides.forEach((s,i)=>{const b=document.createElement('button');b.type='button';b.textContent=String(i+1);b.setAttribute('aria-label',`${i+1}번 장표`);b.addEventListener('click',()=>showSlide(i));$('slide-list').append(b);});showSlide(job.slides.findIndex(s=>s.previewUrl));}
 }
 $('analyze-form').addEventListener('submit',async event=>{
   event.preventDefault();const file=$('html-file').files[0];if(!file||$('analyze-button').disabled)return;
-  const thisRevision=++revision,previousJob=currentJob;controller?.abort();controller=new AbortController();const signal=controller.signal;currentJob=null;busy=true;jobActions();clearDownload();$('preview-area').hidden=true;$('empty-preview').hidden=false;$('preview-image').removeAttribute('src');$('analyze-button').disabled=true;$('analyze-button').textContent='장표를 분석하고 있습니다…';status('analyzing','글꼴과 이미지를 읽고 실제 장표 배치를 확인하고 있습니다.');$('diagnostics').hidden=true;
+  const thisRevision=++revision,previousJob=currentJob;controller?.abort();controller=new AbortController();const signal=controller.signal;currentJob=null;busy=true;jobActions();clearDownload();$('preview-area').hidden=true;$('empty-preview').hidden=false;$('empty-preview').querySelector('p').textContent='입력을 분석하고 있습니다.';$('preview-image').removeAttribute('src');$('analyze-button').disabled=true;$('analyze-button').textContent='장표를 분석하고 있습니다…';status('analyzing','글꼴과 이미지를 읽고 실제 장표 배치를 확인하고 있습니다.');$('diagnostics').hidden=true;
   const noticeTimer=setTimeout(()=>{if(thisRevision===revision&&!signal.aborted&&$('duration-note').hidden){$('duration-note').textContent='장표를 분석하는 데 시간이 걸리고 있어요. 잠시만 기다려 주세요.';$('duration-note').hidden=false;}},20000);
   try{
     if(previousJob)await apiPost(`/api/jobs/${previousJob.id}`,undefined,undefined,'DELETE');
@@ -110,7 +118,7 @@ async function removeCurrentJob(){
     // Keep the request open until DELETE confirms that the worker has stopped.
     if(job){const response=await apiPost(`/api/jobs/${job.id}`,undefined,undefined,'DELETE');if(!response.ok&&response.status!==404)throw new Error('작업 삭제를 확인하지 못했습니다. 다시 시도해 주세요.');deleted=response.status===204;}
     request?.abort();if(thisRevision!==revision)return;
-    currentJob=null;$('preview-area').hidden=true;$('empty-preview').hidden=false;$('preview-image').removeAttribute('src');$('diagnostics').hidden=true;$('diagnostic-list').replaceChildren();
+    currentJob=null;$('preview-area').hidden=true;$('empty-preview').hidden=false;$('empty-preview').querySelector('p').textContent='입력을 분석하고 있습니다.';$('preview-image').removeAttribute('src');$('diagnostics').hidden=true;$('diagnostic-list').replaceChildren();
     status(deleted?'deleted':'cancelled',deleted?'서버의 작업과 결과를 삭제했습니다. 이미 다운로드한 파일은 남아 있습니다.':job?'작업을 찾을 수 없습니다. 이미 만료되었거나 정리 중일 수 있습니다.':'취소 요청을 보냈습니다. 서버에서 진행 중인 작업을 정리합니다.');
   }catch(error){if(thisRevision===revision)status('failed',error.message);}
   finally{if(thisRevision===revision){jobActions();$('analyze-button').disabled=!selectedFileState($('html-file').files[0]).valid;$('analyze-button').textContent='입력 다시 분석';}}

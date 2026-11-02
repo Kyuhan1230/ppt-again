@@ -34,3 +34,22 @@ test('only finite contained positive bounds can be shown; grouped rows retain pe
  const one={x:.1,y:.2,w:.3,h:.4},two={x:.2,y:.1,w:.2,h:.3};assert.ok(validBounds(one));
  const p=projectDiagnostics([{...make(0),objectName:'Shared',bounds:one},{...make(1),objectName:'Shared',bounds:two}]);assert.equal(p.categories[0].rows.length,1);assert.deepEqual(p.categories[0].rows[0].locations,[{slideNumber:1,bounds:one},{slideNumber:2,bounds:two}]);
 });
+test('one blocking cause is first above thousands of representation diagnostics',()=>{
+ const raw=Array.from({length:2051},(_,i)=>({...make(i),severity:'error'}));
+ raw.push({severity:'error',blocking:true,code:'INPUT_INVALID',reasonKey:'PPTX_PARSE_FATAL',reason:'Document analysis stopped'});
+ const p=projectDiagnostics(raw);
+ assert.equal(p.categories[0].blocking,true);assert.equal(p.categories[0].reasonKey,'PPTX_PARSE_FATAL');
+ assert.equal(p.fatalCount,1);assert.equal(p.representationCount,2051);assert.equal(p.total,2052);
+ const container=new Node('ul'),summary=new Node('p');
+ renderDiagnostics({document:{createElement:t=>new Node(t)},container,summary,diagnostics:raw});
+ assert.match(summary.textContent,/변환 중단 원인 1건.*표현 제한 2051건/);
+ const titles=descendants(container).filter(n=>n.className==='diagnostic-title');
+ assert.match(titles[0].textContent,/변환 중단 원인.*문서 분석 실패/);
+});
+test('blocking and recoverable diagnostics never merge or hide a blocking generic cause',()=>{
+ const base={...make(0),severity:'error'};
+ const p=projectDiagnostics([base,{...base,blocking:true},{...base,blocking:true,reasonKey:'PPTX_OBJECT_UNSUPPORTED'}]);
+ assert.equal(p.categories.length,3);assert.equal(p.fatalCount,2);assert.equal(p.representationCount,1);assert.equal(p.suppressedGeneric,0);
+ assert.ok(p.categories.slice(0,2).every(c=>c.blocking));
+ assert.equal(p.categories[2].blocking,false);
+});

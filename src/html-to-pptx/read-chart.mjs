@@ -99,13 +99,13 @@ function referenced(parent,kind,workbook){
 }
 
 export function readChartPackage(parts,chartPath,{budget,contentTypeFor,workbooks=new Map()}={}){
-  const diagnostics=[];let workbookPath=null;
+  const diagnostics=[],presentationWarnings=[];let workbookPath=null,verifiedWorkbookPath=null;
   try{
     requireValue(typeof contentTypeFor==='function'&&contentTypeFor(chartPath)===CHART,'지원하는 차트 ContentType이 아닙니다.');
     const xml=file=>{requireValue(parts[file] instanceof Uint8Array&&parts[file].length>0&&parts[file].length<=16*1024*1024,'차트 부분이 없거나 크기 제한을 초과했습니다.','INPUT_INVALID');const value=strFromU8(parts[file]);requireValue(!/<!DOCTYPE|<!ENTITY/i.test(value),'DTD·엔터티는 지원하지 않습니다.');return new DOMParser({onError:()=>reject('차트 XML이 잘못되었습니다.','INPUT_INVALID')}).parseFromString(value,'application/xml');};
     const root=xml(chartPath).documentElement;requireValue(root.namespaceURI===C&&root.localName==='chartSpace','차트 루트가 잘못되었습니다.','INPUT_INVALID');
     allowed(root,['date1904','lang','roundedCorners','style','chart','spPr','txPr','externalData','extLst']);extensions(one(root,'extLst'));
-    requireValue(!flag(one(root,'date1904'))&&!flag(one(root,'roundedCorners')),'이 차트 날짜·영역 서식은 지원하지 않습니다.');exact(one(root,'style'),'val','2');area(one(root,'spPr'));
+    requireValue(!flag(one(root,'date1904'))&&!flag(one(root,'roundedCorners')),'이 차트 날짜·영역 서식은 지원하지 않습니다.');const chartStyle=one(root,'style');if(chartStyle){const value=attrs(chartStyle,'val');requireValue(/^\d+$/.test(value??'')&&Number(value)>=1&&Number(value)<=48&&!elements(chartStyle).length,'차트 스타일 번호가 올바르지 않습니다.','INPUT_INVALID');if(value!=='2')presentationWarnings.push('선택한 차트 스타일은 아직 재현하지 못합니다.');}area(one(root,'spPr'));
     const ext=one(root,'externalData',true);allowed(ext,['autoUpdate']);const rid=ext.getAttributeNS(R,'id');requireValue(!!rid,'차트 내부 데이터 관계가 없습니다.','INPUT_INVALID');
     const relPath=path.posix.join(path.posix.dirname(chartPath),'_rels',path.posix.basename(chartPath)+'.rels'),rels=xml(relPath).documentElement;
     requireValue(rels.namespaceURI===REL&&rels.localName==='Relationships','차트 관계 루트가 잘못되었습니다.','INPUT_INVALID');allowed(rels,['Relationship'],REL);
@@ -118,14 +118,14 @@ export function readChartPackage(parts,chartPath,{budget,contentTypeFor,workbook
     requireValue(!!target,'차트 내부 데이터가 없습니다.','INPUT_INVALID');workbookPath=path.posix.normalize(target.startsWith('/')?target.slice(1):path.posix.join(path.posix.dirname(chartPath),target));
     requireValue(/^ppt\/embeddings\/[^/]+\.xlsx$/.test(workbookPath)&&parts[workbookPath] instanceof Uint8Array&&contentTypeFor(workbookPath)===XLSX,'차트 데이터는 검증된 내부 XLSX여야 합니다.');
     if(!workbooks.has(workbookPath))workbooks.set(workbookPath,readChartWorkbook(parts[workbookPath],{budget}));
-    const workbook=workbooks.get(workbookPath);if(workbook.diagnostics.some(d=>d.severity==='error'))return {content:null,style:null,workbookPath:null,diagnostics:[...workbook.diagnostics]};
+    const workbook=workbooks.get(workbookPath);if(workbook.diagnostics.some(d=>d.severity==='error'))return {content:null,style:null,workbookPath:null,verifiedWorkbookPath:null,diagnostics:[...workbook.diagnostics]};verifiedWorkbookPath=workbookPath;
     const chart=one(root,'chart',true);allowed(chart,['title','autoTitleDeleted','plotArea','legend','plotVisOnly','dispBlanksAs','showDLblsOverMax','extLst']);extensions(one(chart,'extLst'));
     requireValue(flag(one(chart,'plotVisOnly'),true),'숨은 데이터 표시는 아직 지원하지 않습니다.');flag(one(chart,'showDLblsOverMax')); // Every value must remain inside the explicit axis range below.
     exact(one(chart,'dispBlanksAs'),'val','gap');
     const plot=one(chart,'plotArea',true);allowed(plot,['layout','barChart','lineChart','pieChart','catAx','valAx','spPr','extLst']);noLayout(one(plot,'layout'));area(one(plot,'spPr'));extensions(one(plot,'extLst'));
     const types=elements(plot).filter(n=>['barChart','lineChart','pieChart'].includes(n.localName));requireValue(types.length===1,'혼합·3D 차트는 지원하지 않습니다.');const type=types[0],kind=type.localName.slice(0,-5);
     allowed(type,['varyColors','ser','dLbls','extLst',...(kind==='bar'?['barDir','grouping','gapWidth','overlap','axId']:kind==='line'?['grouping','marker','smooth','axId']:['firstSliceAng'])]);extensions(one(type,'extLst'));
-    if(kind==='bar'){exact(one(type,'barDir',true),'val','col');exact(one(type,'grouping',true),'val','clustered');requireValue(number(one(type,'gapWidth'),'val',33)===33&&number(one(type,'overlap'),'val',0)===0,'변경된 막대 간격은 지원하지 않습니다.');}
+    if(kind==='bar'){exact(one(type,'barDir',true),'val','col');exact(one(type,'grouping',true),'val','clustered');const gap=number(one(type,'gapWidth'),'val',33);requireValue(Number.isInteger(gap)&&gap>=0&&gap<=500,'막대 간격 값이 올바르지 않습니다.','INPUT_INVALID');requireValue(number(one(type,'overlap'),'val',0)===0,'변경된 막대 겹침은 지원하지 않습니다.');if(gap!==33)presentationWarnings.push('변경된 막대 간격은 아직 재현하지 못합니다.');}
     if(kind==='line'){exact(one(type,'grouping'),'val','standard');requireValue(!flag(one(type,'smooth'))&&flag(one(type,'marker'),true),'곡선·표시가 없는 선 차트는 지원하지 않습니다.');}
     if(kind==='pie')requireValue(number(one(type,'firstSliceAng'),'val',0)===0,'회전한 원형 차트는 지원하지 않습니다.');
     requireValue(flag(one(type,'varyColors'))===(kind==='pie'),'개별 색이 지정된 차트는 지원하지 않습니다.');
@@ -189,6 +189,9 @@ export function readChartPackage(parts,chartPath,{budget,contentTypeFor,workbook
       else requireValue(!one(props,'ln',false,A),'변경된 막대 테두리는 아직 지원하지 않습니다.');
     }
     const validation=validateChart(content);requireValue(validation.valid,'현재 차트 값·축이 지원 계약에 맞지 않습니다.','INPUT_INVALID');
-    return {content,style,workbookPath,diagnostics};
-  }catch(e){diagnostics.push(diagnostic(['INPUT_INVALID','UNSUPPORTED_OBJECT','CHART_DATA_MISMATCH','LIMIT_EXCEEDED'].includes(e.code)?e.code:'INPUT_INVALID',e.message));return {content:null,style:null,workbookPath:null,diagnostics};}
+    // Only these known presentation-only differences can be recovered. Reach this
+    // point only after package safety, all formulas/caches, axes and model checks.
+    if(presentationWarnings.length){for(const message of presentationWarnings)diagnostics.push({...diagnostic('UNSUPPORTED_OBJECT',message),recoverable:true,reasonKey:'PPTX_CHART_PRESENTATION_UNSUPPORTED'});return {content:null,style:null,workbookPath:null,verifiedWorkbookPath,diagnostics};}
+    return {content,style,workbookPath,verifiedWorkbookPath,diagnostics};
+  }catch(e){diagnostics.push(diagnostic(['INPUT_INVALID','UNSUPPORTED_OBJECT','CHART_DATA_MISMATCH','LIMIT_EXCEEDED'].includes(e.code)?e.code:'INPUT_INVALID',e.message));return {content:null,style:null,workbookPath:null,verifiedWorkbookPath,diagnostics};}
 }
