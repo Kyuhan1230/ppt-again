@@ -47,7 +47,7 @@ test('repeated warnings are grouped into slide ranges without hiding errors',asy
   const groups=page.locator('#diagnostic-list > .diagnostic-group');assert.equal(await groups.count(),2);assert.match(await page.locator('#diagnostic-summary').innerText(),/변환 차단 1건.*확인 사항 25건/);assert.equal(await page.locator('#diagnostic-list > .diagnostic-raw').count(),1);
   assert.equal(await groups.nth(0).locator('details').getAttribute('open'),null);assert.match(await groups.nth(0).locator('summary').innerText(),/차단/);
   await groups.nth(0).locator('summary').click();assert.match(await groups.nth(0).innerText(),/표현 오류/);
-  await groups.nth(1).locator('summary').click();assert.match(await groups.nth(1).innerText(),/1–25번 장표/);assert.equal(await page.locator('#download-button').isDisabled(),true);
+  await groups.nth(1).locator('summary').click();await groups.nth(1).locator('.diagnostic-objects > li').first().waitFor();assert.match(await groups.nth(1).innerText(),/1–25번 장표/);assert.equal(await page.locator('#download-button').isDisabled(),true);
  }finally{await context.close();}
 });
 test('partial export button describes omitted slides and downloads the supported slides',async()=>{
