@@ -54,6 +54,27 @@ const knownObjectErrors=new Map([
 // Fixed reasons plus narrowly bounded labels cross the UI boundary. Never
 // forward exception text, selectors, source paths, or an arbitrary message.
 const reasons={
+  PPTX_CHART_DATA_MISMATCH:'차트 표시 데이터와 연결된 내장 원자료가 일치하지 않습니다.',
+  PPTX_CHART_STRUCTURE_INVALID:'차트 또는 내장 원자료의 구조가 올바르지 않아 검증을 완료하지 못했습니다.',
+  PPTX_CHART_LIMIT_EXCEEDED:'차트 데이터가 처리 한도를 초과했습니다.',
+  PPTX_CHART_UNSUPPORTED:'이 차트는 현재 지원 범위에서 안전하게 검증하지 못해 부분 변환할 수 없습니다.',
+  PPTX_CHART_VALIDATION_FAILED:'차트 또는 내장 원자료 검증에 실패했습니다.',
+  PPTX_CHART_PRESENTATION_UNSUPPORTED:'차트 데이터와 내장 연결은 검증했지만 이 차트의 스타일 또는 막대 간격은 아직 재현하지 못합니다.',
+  PPTX_INVALID_COORDINATES:'객체의 위치·크기·회전 수치가 없거나 올바르지 않습니다.',
+  PPTX_INVALID_CROP:'그림의 자르기 비율이 유효 범위를 벗어났습니다.',
+  PPTX_UNUSED_EMBEDDED_PACKAGE:'현재 차트에 연결되지 않은 내장 문서가 있어 안전하게 가져올 수 없습니다.',
+  PPTX_UNEXPECTED_PACKAGE_RELATIONSHIP:'검증된 차트 데이터 외의 내장 패키지 연결이 있어 가져올 수 없습니다.',
+  PPTX_XML_INVALID:'PPTX 내부 XML 문서의 구조가 손상되었거나 올바르지 않습니다.',
+  PPTX_REQUIRED_PART_MISSING:'PPTX에서 참조하는 필수 구성 파일이 없습니다.',
+  PPTX_XML_UNSAFE:'DTD 또는 엔터티 선언이 포함되어 안전하게 가져올 수 없습니다.',
+  PPTX_EXTERNAL_REFERENCE:'외부 파일 또는 네트워크를 참조하는 연결이 있어 가져올 수 없습니다.',
+  PPTX_MODEL_INVALID:'읽어 낸 장표 구조가 검증 조건을 충족하지 못했습니다.',
+  PPTX_PARSE_FATAL:'PPTX 내부 구성요소를 안전하게 읽지 못했습니다. 알려진 지원 제한만으로 원인을 확정할 수 없습니다.',
+  PPTX_INHERITED_TEXT_UNRESOLVED:'마스터·레이아웃에서 상속된 글꼴 또는 글자 크기를 아직 해석하지 못합니다. 첨자나 취소선 때문이라는 뜻은 아닙니다.',
+  PPTX_THEME_COLOR_UNSUPPORTED:'테마 또는 시스템 색상 참조를 명시적인 색으로 아직 해석하지 못합니다.',
+  PPTX_INHERITED_SHAPE_STYLE_UNSUPPORTED:'테마에서 상속한 도형 채우기·선·효과를 아직 해석하지 못합니다.',
+  PPTX_ZERO_SIZE_OBJECT_UNSUPPORTED:'너비나 높이가 0인 객체는 보이는 내용이 없다고 단정할 수 없습니다. 부분 변환에서는 표시 상자로 남깁니다.',
+
   PPTX_THEME_BACKGROUND_UNSUPPORTED:'단색이 아닌 테마 배경 또는 색상 효과를 아직 옮기지 못합니다.',
   PPTX_MASTER_ARTWORK_UNSUPPORTED:'마스터에 들어 있는 그림이나 도형을 아직 옮기지 못합니다.',
   PPTX_ANIMATION_UNSUPPORTED:'애니메이션이나 화면 전환은 HTML로 재현하지 않습니다.',
@@ -88,8 +109,10 @@ export function publicDiagnostic(item,slides=[]){
   const explicit=Number.isInteger(item.slideNumber)&&item.slideNumber>0&&item.slideNumber<=200?item.slideNumber:null;
   const known=code==='UNSUPPORTED_OBJECT'&&severity==='error'?knownObjectErrors.get(item.message):null;
   const result={code,severity,message:known||(severity==='warning'&&warnings[code])||messages[code],slideNumber:index<0?explicit:index+1};
+  if(item.blocking===true&&severity==='error'){result.blocking=true;result.message='변환 중단: '+result.message;}
   if(Object.hasOwn(reasons,item.reasonKey)){
     result.reasonKey=item.reasonKey;result.reason=reasons[item.reasonKey];
+    if(item.blocking===true&&severity==='error'){result.blocking=true;result.message='변환 중단: '+reasons[item.reasonKey];}
     const name=safeLabel(item.objectName),font=safeLabel(item.fontFamily);
     if(name)result.objectName=name;
     if(font)result.fontFamily=font;

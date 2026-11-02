@@ -44,8 +44,8 @@ test('repeated warnings are grouped into slide ranges without hiding errors',asy
  const context=await browser.newContext(),page=await context.newPage();try{
   await page.route('**/api/analyze',route=>route.fulfill({json:{id:'synthetic',fileName:'sample.html',sourceType:'html',targetType:'pptx',status:'failed',slideCount:25,slides:[],exportAvailable:false,diagnostics:[...Array.from({length:25},(_,i)=>({code:'FONT_FORMAT_UNSUPPORTED',severity:'warning',message:'글꼴 포함 제한',slideNumber:i+1})),{code:'UNSUPPORTED_OBJECT',severity:'error',message:'표현 오류',slideNumber:3}]}}));
   await page.goto(app.url);await select(page,'sample.html',source);await page.waitForFunction(()=>document.getElementById('status-badge').dataset.state==='failed');
-  const groups=page.locator('#diagnostic-list > .diagnostic-group');assert.equal(await groups.count(),2);assert.match(await page.locator('#diagnostic-summary').innerText(),/변환 차단 1건.*확인 사항 25건/);assert.equal(await page.locator('#diagnostic-list > .diagnostic-raw').count(),1);
-  assert.equal(await groups.nth(0).locator('details').getAttribute('open'),null);assert.match(await groups.nth(0).locator('summary').innerText(),/차단/);
+  const groups=page.locator('#diagnostic-list > .diagnostic-group');assert.equal(await groups.count(),2);assert.match(await page.locator('#diagnostic-summary').innerText(),/표현 제한 1건.*확인 사항 25건/);assert.equal(await page.locator('#diagnostic-list > .diagnostic-raw').count(),1);
+  assert.equal(await groups.nth(0).locator('details').getAttribute('open'),null);assert.match(await groups.nth(0).locator('summary').innerText(),/표현 제한/);
   await groups.nth(0).locator('summary').click();assert.match(await groups.nth(0).innerText(),/표현 오류/);
   await groups.nth(1).locator('summary').click();await groups.nth(1).locator('.diagnostic-objects > li').first().waitFor();assert.match(await groups.nth(1).innerText(),/1–25번 장표/);assert.equal(await page.locator('#download-button').isDisabled(),true);
  }finally{await context.close();}
@@ -62,10 +62,10 @@ test('partial export button describes omitted slides and downloads the supported
 test('one file screen downloads editable tables/charts in both directions and retains current HTML edits',async()=>{
  const context=await browser.newContext({acceptDownloads:true}),page=await context.newPage();
  try{
-  await page.goto(app.url);await select(page,'review.html',source);assert.match(await page.locator('#conversion-direction').textContent(),/HTML → PPTX/);await analyze(page);
+  await page.goto(app.url);await select(page,'review.html',source);assert.equal(await page.locator('#html-options').isVisible(),true);await analyze(page);
   const ppt=await download(page);assert.equal(ppt.name,'review.pptx');const audit=await inspectPptxIndependently(ppt.bytes);assert.equal(audit.nativeTableCount,1);assert.equal(audit.nativeChartCount,1);assert.equal(audit.pictureCount,0);
   const original=await readPptx(ppt.bytes);assert.equal(original.status,'parsed');
-  await select(page,'revised.pptx',ppt.bytes);assert.match(await page.locator('#conversion-direction').textContent(),/PPTX → HTML/);assert.equal(await page.locator('#html-options').isHidden(),true);await analyze(page);assert.equal(await page.locator('#download-button').textContent(),'HTML 다운로드');
+  await select(page,'revised.pptx',ppt.bytes);assert.equal(await page.locator('#pptx-options').isVisible(),true);assert.equal(await page.locator('#html-options').isHidden(),true);await analyze(page);assert.equal(await page.locator('#download-button').textContent(),'HTML 다운로드');
   const html=await download(page);assert.equal(html.name,'revised.html');const text=html.bytes.toString('utf8');assert.match(text,/script-src 'none'/);assert.match(text,/data-chart-for/);assert.doesNotMatch(text,/<script[^>]*src=/);
   const edited=text.replace('>120<','>135<').replace(/(<script\b[^>]*data-chart-for[^>]*>)([\s\S]*?)(<\/script>)/g,(_,start,json,end)=>{const c=JSON.parse(json);c.series[0].values[1]=7;return start+JSON.stringify(c)+end;});assert.notEqual(edited,text);
   await select(page,'current.html',edited);assert.equal(await page.locator('#html-options').isVisible(),true);await analyze(page);const output=await download(page),current=await readPptx(output.bytes);assert.equal(current.status,'parsed',JSON.stringify(current.diagnostics));

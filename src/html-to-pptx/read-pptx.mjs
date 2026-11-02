@@ -57,9 +57,22 @@ function themeBackground(ref,theme,master,overrides){
 export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}={}){
   const selectedFont=({'malgun-gothic':'Malgun Gothic',pretendard:'Pretendard'})[fontPolicy];
   const objectContexts=new Map();
+  let currentContext={};
   const diagnostics=[],model={version:1,sourceDigest:sha256(bytes??''),slides:[],assets:[]};
   const fail=(code,message,slideId=null,nodeId=null)=>diagnostics.push(diagnostic(code,message,{slideId,nodeId}));
   const done=()=>{const failed=diagnostics.some(d=>d.severity==='error');return {status:failed?'failed':'parsed',model:failed?null:model,diagnostics};};
+  const fatalReasons=new Map([
+    ['객체 좌표·크기·회전값이 잘못되었습니다.','PPTX_INVALID_COORDINATES'],
+    ['그룹 좌표·배율이 잘못되었습니다.','PPTX_INVALID_COORDINATES'],
+    ['그림 자르기 좌표가 잘못되었습니다.','PPTX_INVALID_CROP'],
+    ['현재 차트에 연결되지 않은 내장 문서는 지원하지 않습니다.','PPTX_UNUSED_EMBEDDED_PACKAGE'],
+    ['검증한 차트 workbook 외의 패키지 관계는 지원하지 않습니다.','PPTX_UNEXPECTED_PACKAGE_RELATIONSHIP'],
+    ['잘못된 PPTX XML입니다.','PPTX_XML_INVALID'],
+    ['PPTX 필수 부분이 없습니다.','PPTX_REQUIRED_PART_MISSING'],
+    ['DTD·엔터티는 지원하지 않습니다.','PPTX_XML_UNSAFE'],
+    ['외부 참조가 있는 PPTX는 지원하지 않습니다.','PPTX_EXTERNAL_REFERENCE'],
+    ['외부 PPTX 경로입니다.','PPTX_EXTERNAL_REFERENCE']
+  ]);
   try{
     if(!['original','malgun-gothic','pretendard'].includes(fontPolicy)||typeof allowPartial!=='boolean')throw new Error('PPTX 가져오기 옵션이 올바르지 않습니다.');
     if(!(bytes instanceof Uint8Array)||bytes.length<22||bytes.length>64*1024*1024)throw new Error('PPTX 바이트는 64MiB 이내여야 합니다.');
@@ -68,7 +81,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
     const xml=file=>{
       if(!parts[file])throw new Error('PPTX 필수 부분이 없습니다.');
       const s=strFromU8(parts[file]);if(/<!DOCTYPE|<!ENTITY/i.test(s))throw new Error('DTD·엔터티는 지원하지 않습니다.');
-      return new DOMParser({onError:()=>{throw new Error('잘못된 PPTX XML입니다.');}}).parseFromString(s,'application/xml');
+      try{return new DOMParser({onError:()=>{throw new Error('잘못된 PPTX XML입니다.');}}).parseFromString(s,'application/xml');}catch{throw new Error('잘못된 PPTX XML입니다.');}
     };
     const relationCache=new Map();
     const relationRecords=file=>{
@@ -147,12 +160,13 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
       if(model.fonts.length)model.version=2;else delete model.fonts;
     }
     for(const [index,ref] of slideRefs.entries()){
+      currentContext={slideId:`slide-${index+1}`,slideNumber:index+1};
       const file=presRels.get(attr(ref,'r:id')),doc=xml(file),rels=relationships(file),tree=all(doc,'spTree')[0];
       const slide={id:`slide-${index+1}`,widthCssPx:px(model.pptxSizeEmu.width),heightCssPx:px(model.pptxSizeEmu.height),background:{color:'#ffffff',image:'none'},nodes:[]};model.slides.push(slide);
       let activeNodeId=null;
       const issue=(message,nodeId=null,explicitReason=null)=>{
         nodeId??=activeNodeId;
-        const reasonKey=/테마 배경|단색 외의 PPT 배경/.test(message)?'PPTX_THEME_BACKGROUND_UNSUPPORTED':/마스터·레이아웃/.test(message)?'PPTX_MASTER_ARTWORK_UNSUPPORTED':/타이밍·전환/.test(message)?'PPTX_ANIMATION_UNSUPPORTED':/회전·뒤집힌/.test(message)?'PPTX_OBJECT_ROTATION_UNSUPPORTED':/객체 위치/.test(message)?'PPTX_OBJECT_POSITION_UNSUPPORTED':/그룹/.test(message)?'PPTX_GROUP_TRANSFORM_UNSUPPORTED':/그림/.test(message)?'PPTX_IMAGE_UNSUPPORTED':/도형·채움·효과|도형 채움/.test(message)?'PPTX_SHAPE_EFFECT_UNSUPPORTED':/글꼴|텍스트|글자|문단|글머리/.test(message)?'PPTX_TEXT_STYLE_UNSUPPORTED':'PPTX_OBJECT_UNSUPPORTED';
+        const reasonKey=/명시적 글꼴·크기가 없는 상속/.test(message)?'PPTX_INHERITED_TEXT_UNRESOLVED':/테마·시스템 색/.test(message)?'PPTX_THEME_COLOR_UNSUPPORTED':/상속된 도형 채움·선·효과/.test(message)?'PPTX_INHERITED_SHAPE_STYLE_UNSUPPORTED':/테마 배경|단색 외의 PPT 배경/.test(message)?'PPTX_THEME_BACKGROUND_UNSUPPORTED':/마스터·레이아웃/.test(message)?'PPTX_MASTER_ARTWORK_UNSUPPORTED':/타이밍·전환/.test(message)?'PPTX_ANIMATION_UNSUPPORTED':/회전·뒤집힌/.test(message)?'PPTX_OBJECT_ROTATION_UNSUPPORTED':/객체 위치/.test(message)?'PPTX_OBJECT_POSITION_UNSUPPORTED':/그룹/.test(message)?'PPTX_GROUP_TRANSFORM_UNSUPPORTED':/그림/.test(message)?'PPTX_IMAGE_UNSUPPORTED':/도형·채움·효과|도형 채움/.test(message)?'PPTX_SHAPE_EFFECT_UNSUPPORTED':/글꼴|텍스트|글자|문단|글머리/.test(message)?'PPTX_TEXT_STYLE_UNSUPPORTED':'PPTX_OBJECT_UNSUPPORTED';
         diagnostics.push({...diagnostic('UNSUPPORTED_OBJECT',message,{slideId:slide.id,nodeId}),slideNumber:index+1,...(objectContexts.get(`${slide.id}:${nodeId}`)??{objectType:'background'}),reasonKey:explicitReason??reasonKey,recoverable:true});
       };
       const inherited=new Set([...rels.values()].filter(p=>p.startsWith('ppt/slideLayouts/')));
@@ -218,12 +232,15 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
           const nv=all(object,'cNvPr')[0],base=attr(nv,'name')||`object-${attr(nv,'id',String(objectCount))}`;
           let id=base,suffix=1;while(seen.has(id))id=`${base}-${suffix++}`;seen.add(id);
           activeNodeId=id;
+          currentContext={slideId:slide.id,slideNumber:index+1,nodeId:id};
           objectContexts.set(`${slide.id}:${id}`,{objectName:base,objectType:object.localName==='pic'?'image':object.localName==='grpSp'?'group':object.localName==='graphicFrame'?(all(object,'tbl').length?'table':'chart'):all(object,'t').length?'text':'shape'});
+          Object.assign(currentContext,objectContexts.get(`${slide.id}:${id}`));
           if(!['sp','cxnSp','pic','grpSp','graphicFrame'].includes(object.localName)){issue('이 객체는 아직 지원하지 않습니다.',id);continue;}
           const group=object.localName==='grpSp',pr=child(object,group?'grpSpPr':'spPr'),xfrm=object.localName==='graphicFrame'?child(object,'xfrm'):child(pr,'xfrm');
           if(!xfrm){issue('마스터에 상속된 객체 위치는 아직 지원하지 않습니다.',id);continue;}
           const position=child(xfrm,'off'),extent=child(xfrm,'ext'),isLine=object.localName==='cxnSp'||attr(child(pr,'prstGeom'),'prst')==='line';
-          if(!position||!extent||!['x','y'].every(k=>Number.isFinite(num(position,k,NaN)))||!['cx','cy'].every(k=>Number.isFinite(num(extent,k,NaN))&&(isLine?num(extent,k)>=0:num(extent,k)>0))||!Number.isFinite(num(xfrm,'rot')))throw new Error('객체 좌표·크기·회전값이 잘못되었습니다.');
+          if(!position||!extent||!['x','y'].every(k=>Number.isFinite(num(position,k,NaN)))||!['cx','cy'].every(k=>Number.isFinite(num(extent,k,NaN))&&num(extent,k)>=0)||!Number.isFinite(num(xfrm,'rot')))throw new Error('객체 좌표·크기·회전값이 잘못되었습니다.');
+          if(!isLine&&(num(extent,'cx')===0||num(extent,'cy')===0)){issue('너비 또는 높이가 0인 객체는 화면 재현을 확정할 수 없습니다.',id,'PPTX_ZERO_SIZE_OBJECT_UNSUPPORTED');continue;}
           if(num(xfrm,'rot')!==0||(!['cxnSp'].includes(object.localName)&&!['line'].includes(attr(child(pr,'prstGeom'),'prst'))&&(num(xfrm,'flipH')||num(xfrm,'flipV')))){issue('회전·뒤집힌 객체는 아직 지원하지 않습니다.',id);continue;}
           const off=child(xfrm,'off'),ext=child(xfrm,'ext');
           const raw={x:num(off,'x'),y:num(off,'y'),w:num(ext,'cx'),h:num(ext,'cy')};
@@ -239,7 +256,15 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
               if(graphic.namespaceURI!==A||data.namespaceURI!==A||refs.length!==1||chart?.namespaceURI!==C||chart.localName!=='chart'||relation?.type!==`${R}/chart`||!relation.target.startsWith('ppt/charts/')||!parts[relation.target])throw new Error('차트 관계 또는 내장 부분이 잘못되었습니다.');
               const chartPath=relation.target;
               if(!chartPackages.has(chartPath))chartPackages.set(chartPath,readChartPackage(parts,chartPath,{budget,contentTypeFor,workbooks}));
-              const result=chartPackages.get(chartPath);diagnostics.push(...result.diagnostics.map(d=>({...d,slideId:slide.id,nodeId:id})));
+              const result=chartPackages.get(chartPath);
+              // Workbook ownership is a validated package fact, independent of
+              // whether this chart's visual presentation can be represented.
+              if(result.verifiedWorkbookPath){usedCharts.add(chartPath);usedWorkbooks.add(result.verifiedWorkbookPath);}
+              diagnostics.push(...result.diagnostics.map(d=>{
+                const blocking=d.severity==='error'&&d.recoverable!==true;
+                const reasonKey=d.reasonKey??(blocking?({CHART_DATA_MISMATCH:'PPTX_CHART_DATA_MISMATCH',INPUT_INVALID:'PPTX_CHART_STRUCTURE_INVALID',LIMIT_EXCEEDED:'PPTX_CHART_LIMIT_EXCEEDED',UNSUPPORTED_OBJECT:'PPTX_CHART_UNSUPPORTED'})[d.code]??'PPTX_CHART_VALIDATION_FAILED':undefined);
+                return {...d,slideId:slide.id,nodeId:id,slideNumber:index+1,objectName:base,objectType:'chart',...(blocking?{blocking:true}:{}),...(reasonKey?{reasonKey}:{})};
+              }));
               if(result.content){
                 if((chartPoints+=result.content.categories.length*result.content.series.length)>10000)throw Object.assign(new Error('문서의 차트 데이터가 10,000점을 초과했습니다.'),{code:'LIMIT_EXCEEDED'});
                 usedCharts.add(chartPath);usedWorkbooks.add(result.workbookPath);
@@ -248,13 +273,16 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
               continue;
             }
             const table=readNativeTable(object,{slideId:slide.id,sourceId:id,boxCssPx:box,readText:tx=>readText(tx,id),readColor:color});
-            diagnostics.push(...table.diagnostics);
+            diagnostics.push(...table.diagnostics.map(d=>({...d,...(d.severity==='error'&&d.recoverable!==true?{blocking:true}:{}),slideNumber:index+1,objectName:base,objectType:'table'})));
             if(table.node){slide.nodes.push({...node,...table.node});model.version=2;}continue;
           }
           if(group){
             if(parentId){issue('중첩 그룹은 아직 지원하지 않습니다.',id);continue;}
             node.kind='group';slide.nodes.push(node);
-            const co=child(xfrm,'chOff'),ce=child(xfrm,'chExt'),sx=raw.w/num(ce,'cx'),sy=raw.h/num(ce,'cy');
+            const co=child(xfrm,'chOff'),ce=child(xfrm,'chExt');
+            if(!co||!ce||!['x','y'].every(k=>Number.isFinite(num(co,k,NaN)))||!['cx','cy'].every(k=>Number.isFinite(num(ce,k,NaN))&&num(ce,k)>=0))throw new Error('그룹 좌표·배율이 잘못되었습니다.');
+            if(num(ce,'cx')===0||num(ce,'cy')===0){issue('크기가 0인 그룹 내부 좌표는 화면 재현을 확정할 수 없습니다.',id,'PPTX_ZERO_SIZE_OBJECT_UNSUPPORTED');continue;}
+            const sx=raw.w/num(ce,'cx'),sy=raw.h/num(ce,'cy');
             if(!Number.isFinite(sx)||!Number.isFinite(sy)||sx<=0||sy<=0)throw new Error('그룹 좌표·배율이 잘못되었습니다.');
             if(Math.abs(sx-sy)>1e-7){issue('비균일 그룹 배율은 지원하지 않습니다.',id);continue;}
             if(Math.abs(sx-1)>1e-7){issue('배율이 적용된 그룹의 글자·선 굵기는 아직 보존할 수 없습니다.',id);continue;}
@@ -312,6 +340,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
         }
       };
       visit(tree);
+      currentContext={};
     }
     for(const name of Object.keys(parts)){
       if(!name.endsWith('/')&&(/(?:^|\/)embeddings\//i.test(name)||contentTypeFor(name)==='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')&&!usedWorkbooks.has(name))throw new Error('현재 차트에 연결되지 않은 내장 문서는 지원하지 않습니다.');
@@ -337,7 +366,11 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
         const oldNodes=new Map(slide.nodes.map(n=>[n.id,n]));slide.nodes=slide.nodes.filter(n=>!bad.has(n.id));
         const groups=new Map();for(const d of recoverable){const key=d.nodeId??'slide-background';if(!groups.has(key))groups.set(key,[]);groups.get(key).push(d);}
         let offset=0;for(const [key,items] of groups){
-          const old=oldNodes.get(key),candidate=old?.boxCssPx;
+          const old=oldNodes.get(key),bounds=objectContexts.get(`${slide.id}:${key}`)?.bounds;
+          // Unsupported charts/tables may have no model node. Reuse only their
+          // already-validated native coordinates, never an invented location.
+          const hasBounds=bounds&&['x','y','w','h'].every(k=>Number.isFinite(bounds[k]))&&bounds.x>=0&&bounds.y>=0&&bounds.w>0&&bounds.h>0&&bounds.x+bounds.w<=1&&bounds.y+bounds.h<=1;
+          const candidate=old?.boxCssPx??(hasBounds?{x:bounds.x*slide.widthCssPx,y:bounds.y*slide.heightCssPx,w:bounds.w*slide.widthCssPx,h:bounds.h*slide.heightCssPx}:null);
           const valid=candidate&&Object.values(candidate).every(Number.isFinite)&&candidate.w>0&&candidate.h>0;
           const box=valid?{...candidate}:{x:16,y:16+offset,w:Math.max(40,slide.widthCssPx-32),h:72};offset+=80;
           const text='[변환하지 못한 '+(items[0].objectType==='background'?'배경/효과':'객체')+'] '+items.map(d=>d.message).filter((x,i,a)=>a.indexOf(x)===i).join(' ');
@@ -349,7 +382,10 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
       }
     }
     for(const d of diagnostics){if(d.slideId&&!d.slideNumber){const index=model.slides.findIndex(s=>s.id===d.slideId);if(index>=0)d.slideNumber=index+1;}if(d.nodeId)Object.assign(d,objectContexts.get(`${d.slideId}:${d.nodeId}`)??{});}
-    for(const e of validateModel(model).errors)fail('INPUT_INVALID',`${e.path}: ${e.message}`);
-  }catch(e){fail(typeof e.code==='string'&&(/^(FONT_|CHART_)/.test(e.code)||e.code==='LIMIT_EXCEEDED')?e.code:'INPUT_INVALID',e.message);}
+    for(const e of validateModel(model).errors)diagnostics.push({...diagnostic('INPUT_INVALID',`${e.path}: ${e.message}`),reasonKey:'PPTX_MODEL_INVALID',blocking:true});
+  }catch(e){
+    const code=typeof e.code==='string'&&(/^(FONT_|CHART_)/.test(e.code)||e.code==='LIMIT_EXCEEDED')?e.code:'INPUT_INVALID';
+    diagnostics.push({...diagnostic(code,e.message,currentContext),...currentContext,reasonKey:fatalReasons.get(e.message)??(code==='INPUT_INVALID'?'PPTX_PARSE_FATAL':undefined),blocking:true});
+  }
   return done();
 }

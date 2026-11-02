@@ -1,7 +1,7 @@
 name: Synthetic UI visual QA
 on:
   push:
-    branches: [fix/pptx-diagnostics-ux]
+    branches: [fix/pptx-diagnostics-ux, fix/pptx-partial-diagnostics-v2]
 permissions:
   contents: read
 concurrency:
@@ -19,6 +19,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node scripts/capture-ui-qa.mjs
+        env:
+          QA_SCREENSHOT_DIR: ${{ runner.temp }}/ppt-again-ui-qa
+      - run: node scripts/capture-import-regression.mjs
         env:
           QA_SCREENSHOT_DIR: ${{ runner.temp }}/ppt-again-ui-qa
       - uses: actions/upload-artifact@v4
