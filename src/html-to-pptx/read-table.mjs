@@ -7,13 +7,17 @@ const px=(n,k,fallback=0)=>Number(attr(n,k,fallback))/EMU_PER_CSS_PX;
 const A='http://schemas.openxmlformats.org/drawingml/2006/main';
 
 export function readNativeTable(frame,{slideId,sourceId,boxCssPx,readText,readColor}){
-  const diagnostics=[],issue=message=>diagnostics.push(diagnostic('UNSUPPORTED_OBJECT',message,{slideId,nodeId:sourceId}));
+  const recoverableMessages=new Set(['차트·SmartArt는 아직 표로 읽을 수 없습니다.','세로쓰기·복잡한 표 셀 효과는 지원하지 않습니다.','테마에서 상속된 표 테두리는 지원하지 않습니다.','단색 실선 외의 표 테두리는 지원하지 않습니다.','테마에서 상속된 표 배경은 지원하지 않습니다.']);
+  const diagnostics=[],issue=(message,code='UNSUPPORTED_OBJECT')=>diagnostics.push({...diagnostic(code,message,{slideId,nodeId:sourceId}),recoverable:code==='UNSUPPORTED_OBJECT'&&recoverableMessages.has(message),reasonKey:recoverableMessages.has(message)?'PPTX_TABLE_STYLE_UNSUPPORTED':code==='LIMIT_EXCEEDED'?'PPTX_TABLE_LIMIT_EXCEEDED':'PPTX_TABLE_STRUCTURE_INVALID'});
   const graphic=child(frame,'graphic'),data=child(graphic,'graphicData'),table=child(data,'tbl');
-  if(graphic?.namespaceURI!==A||attr(data,'uri')!=='http://schemas.openxmlformats.org/drawingml/2006/table'||table?.namespaceURI!==A||elements(data).length!==1){issue('차트·SmartArt는 아직 표로 읽을 수 없습니다.');return {node:null,diagnostics};}
+  if(graphic?.namespaceURI!==A||data?.namespaceURI!==A){issue('표 그래픽 구조 또는 네임스페이스가 잘못되었습니다.','INPUT_INVALID');return {node:null,diagnostics};}
+  if(attr(data,'uri')!=='http://schemas.openxmlformats.org/drawingml/2006/table'){issue('차트·SmartArt는 아직 표로 읽을 수 없습니다.');return {node:null,diagnostics};}
+  if(table?.namespaceURI!==A||elements(data).length!==1){issue('표 구조 또는 네임스페이스가 잘못되었습니다.','INPUT_INVALID');return {node:null,diagnostics};}
   const columns=elements(child(table,'tblGrid')),rows=elements(table).filter(n=>n.localName==='tr');
-  if(!rows.length||rows.length>100||!columns.length||columns.length>50||rows.length*columns.length>2000){issue('표의 행·열·셀 수 제한을 초과했습니다.');return {node:null,diagnostics};}
+  if(!rows.length||rows.length>100||!columns.length||columns.length>50||rows.length*columns.length>2000){issue('표의 행·열·셀 수 제한을 초과했습니다.','LIMIT_EXCEEDED');return {node:null,diagnostics};}
   if(columns.some(n=>n.localName!=='gridCol'||n.namespaceURI!==A)){issue('표 열 정의가 잘못되었습니다.');return {node:null,diagnostics};}
   const columnWidthsCssPx=columns.map(n=>px(n,'w')),rowHeightsCssPx=rows.map(n=>px(n,'h')),cells=[];
+  if([...columnWidthsCssPx,...rowHeightsCssPx].some(n=>!Number.isFinite(n)||n<=0)){issue('표 행·열 크기가 잘못되었습니다.','INPUT_INVALID');return {node:null,diagnostics};}
   const themed=!!child(child(table,'tblPr'),'tableStyleId'),covered=new Map();
   for(const [row,tr] of rows.entries()){
     const rowCells=elements(tr).filter(n=>n.localName==='tc');

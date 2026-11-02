@@ -7,7 +7,7 @@ import {publicDiagnostic} from './public-diagnostics.mjs';
 import {assetPath} from './assets.mjs';
 
 const MiB=1024*1024;
-const help=`Usage: ppt-again convert <input.html|input.pptx> --output <output.pptx|output.html> [--selector <css>] [--assets <directory>] [--json]\n       ppt-again --help | --version`;
+const help=`Usage: ppt-again convert <input.html|input.pptx> --output <output.pptx|output.html> [--selector <css>] [--assets <directory>] [--json] [--font-policy original|malgun-gothic|pretendard] [--allow-partial]\n       ppt-again --help | --version`;
 const fail=(code,message,exit=1)=>Object.assign(new Error(message),{code,exit});
 async function readFileLimited(file,max){
   const handle=await fs.open(file,'r');
@@ -30,16 +30,17 @@ async function readAssets(dir){
   await visit(root);return assets;
 }
 async function main(){
- let values,positionals;try{({values,positionals}=parseArgs({allowPositionals:true,options:{output:{type:'string'},selector:{type:'string'},assets:{type:'string'},json:{type:'boolean'},help:{type:'boolean'},version:{type:'boolean'}}}));}catch{throw fail('USAGE',help,2);}
+ let values,positionals;try{({values,positionals}=parseArgs({allowPositionals:true,options:{output:{type:'string'},selector:{type:'string'},assets:{type:'string'},json:{type:'boolean'},help:{type:'boolean'},version:{type:'boolean'},'font-policy':{type:'string'},'allow-partial':{type:'boolean'}}}));}catch{throw fail('USAGE',help,2);}
  if(values.help&&positionals.length===0){console.log(help);return;}
  if(values.version&&positionals.length===0){const pkg=JSON.parse(await fs.readFile(new URL('../../package.json',import.meta.url),'utf8'));console.log(pkg.version);return;}
  if(positionals.length!==2||positionals[0]!=='convert'||!values.output||values.help||values.version)throw fail('USAGE',help,2);
  const inputPath=positionals[1],output=values.output,ext=path.extname(inputPath).toLowerCase(),outExt=path.extname(output).toLowerCase();
  const sourceType=ext==='.pptx'?'pptx':ext==='.html'||ext==='.htm'?'html':null,targetType=sourceType==='html'?'pptx':'html';
+ if(sourceType==='html'&&(values['font-policy']!==undefined||values['allow-partial']!==undefined)||values['font-policy']!==undefined&&!['original','malgun-gothic','pretendard'].includes(values['font-policy']))throw fail('USAGE',help,2);
  if(!sourceType||outExt!==`.${targetType}`||(sourceType==='pptx'&&(values.selector!==undefined||values.assets!==undefined))||values.selector!==undefined&&!values.selector.trim())throw fail('USAGE',help,2);
  try{await fs.lstat(output);throw fail('OUTPUT_EXISTS','출력 파일이 이미 존재합니다. 다른 경로를 지정해 주세요.');}catch(e){if(e.code!=='ENOENT')throw e;}
  let bytes;try{bytes=await readFileLimited(inputPath,(sourceType==='html'?16:64)*MiB);}catch(e){if(e.code==='ENOENT')throw fail('USAGE','입력 파일을 찾을 수 없습니다.',2);throw e;}
- const input=sourceType==='html'?{html:bytes.toString('utf8'),assets:values.assets?await readAssets(values.assets):[],slideSelector:values.selector??null,allowTableOverlay:true}:bytes;
+ const input=sourceType==='html'?{html:bytes.toString('utf8'),assets:values.assets?await readAssets(values.assets):[],slideSelector:values.selector??null,allowTableOverlay:true}:{bytes,options:{fontPolicy:values['font-policy']??'original',allowPartial:values['allow-partial']??false}};
  const controller=new AbortController(),abort=()=>controller.abort();process.on('SIGINT',abort);process.on('SIGTERM',abort);
  try{
   const {measured}=await runConversion({operation:sourceType==='html'?'analyze-html':'analyze-pptx',input,signal:controller.signal});

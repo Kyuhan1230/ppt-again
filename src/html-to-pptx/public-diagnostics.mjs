@@ -1,4 +1,8 @@
 const messages={
+  PPTX_FONT_REPLACED:'선택한 글꼴로 HTML 문구를 바꿨습니다. 글꼴 파일은 포함하지 않으며 줄바꿈과 배치가 달라질 수 있습니다.',
+  PPTX_OBJECT_PLACEHOLDER:'지원하지 않는 내용을 표시 상자로 남겼습니다. 원본과 비교해 보완해 주세요.',
+  PPTX_PREVIEW_UNAVAILABLE:'미리보기를 만들지 못했지만 읽어 낸 내용을 HTML로 내려받을 수 있습니다. 배치를 확인해 주세요.',
+
   INPUT_INVALID:'입력 파일의 형식과 크기를 확인해 주세요.',
   CHART_DATA_REQUIRED:'차트의 원자료가 필요합니다. 차트 영역과 같은 ID의 JSON 데이터를 함께 넣어 주세요.',
   CHART_DATA_MISMATCH:'차트 표시와 원자료가 일치하지 않습니다. 원자료와 차트 표시를 일치시킨 뒤 다시 저장해 주세요.',
@@ -47,12 +51,49 @@ const knownObjectErrors=new Map([
   ['CSS ::after의 생성 콘텐츠는 명시적인 HTML 요소로 넣어 주세요.','CSS로 만들어진 화면 내용은 아직 변환하지 못합니다.']
 ]);
 
-// Only fixed messages cross the UI boundary. Input text, selectors and exception
-// details remain in the developer record, never in a customer diagnostic.
+// Fixed reasons plus narrowly bounded labels cross the UI boundary. Never
+// forward exception text, selectors, source paths, or an arbitrary message.
+const reasons={
+  PPTX_THEME_BACKGROUND_UNSUPPORTED:'단색이 아닌 테마 배경 또는 색상 효과를 아직 옮기지 못합니다.',
+  PPTX_MASTER_ARTWORK_UNSUPPORTED:'마스터에 들어 있는 그림이나 도형을 아직 옮기지 못합니다.',
+  PPTX_ANIMATION_UNSUPPORTED:'애니메이션이나 화면 전환은 HTML로 재현하지 않습니다.',
+  PPTX_OBJECT_ROTATION_UNSUPPORTED:'회전 또는 뒤집힌 객체를 아직 옮기지 못합니다.',
+  PPTX_OBJECT_POSITION_UNSUPPORTED:'객체의 좌표 또는 크기를 지원 범위에서 읽지 못했습니다.',
+  PPTX_SHAPE_GRADIENT_UNSUPPORTED:'도형의 그라데이션 채우기를 아직 옮기지 못합니다.',
+  PPTX_CUSTOM_GEOMETRY_UNSUPPORTED:'자유형 경로로 만든 도형을 아직 SVG나 HTML 도형으로 옮기지 못합니다.',
+  PPTX_TABLE_STRUCTURE_INVALID:'표의 행·열·셀 구조 또는 네임스페이스가 잘못되어 안전하게 읽을 수 없습니다.',
+  PPTX_TABLE_LIMIT_EXCEEDED:'표의 행·열·셀 수가 처리 한도를 초과했습니다.',
+  PPTX_TABLE_STYLE_UNSUPPORTED:'표 안의 글머리표·글자 효과·특수 서식을 아직 옮기지 못합니다.',
+  PPTX_TABLE_UNSUPPORTED:'이 표의 병합·서식·내용 구성을 아직 옮기지 못합니다.',
+  PPTX_SHAPE_EFFECT_UNSUPPORTED:'그라데이션·자유형 경로·복잡한 도형 효과를 아직 옮기지 못합니다.',
+  PPTX_TEXT_STYLE_UNSUPPORTED:'첨자·취소선·글자 효과 등 일부 텍스트 서식을 아직 옮기지 못합니다.',
+  PPTX_GROUP_TRANSFORM_UNSUPPORTED:'배율이나 변형이 적용된 그룹을 아직 보존하지 못합니다.',
+  PPTX_IMAGE_UNSUPPORTED:'그림 형식 또는 자르기·채우기를 아직 지원하지 않습니다.',
+  PPTX_OBJECT_UNSUPPORTED:'이 객체의 표현을 지원하지 않아 원본 확인이 필요합니다.',
+  PPTX_FONT_SELECTED:'HTML의 글꼴을 사용자가 선택한 글꼴로 변경했습니다.',
+  PPTX_EMBEDDED_FONT_IGNORED:'명시한 대체 글꼴을 사용하며 내장 글꼴 파일은 가져오거나 배포하지 않습니다.',
+  PREVIEW_UNAVAILABLE:'미리보기 렌더러를 사용할 수 없습니다. HTML 파일에서 배치를 확인해 주세요.'
+};
+const objectTypes=new Set(['text','shape','image','group','table','chart','background','font','line']);
+function safeLabel(value){
+  if(typeof value!=='string')return null;
+  const label=value.replace(/[\u0000-\u001f\u007f]/g,' ').trim();
+  if(!label||label.length>120||/[<>]|(?:[a-z][a-z0-9+.-]*:\/\/)|(?:^[a-z]:[\\/])|(?:^[/\\])|(?:\.\.[/\\])/i.test(label))return null;
+  return label;
+}
 export function publicDiagnostic(item,slides=[]){
   const code=Object.hasOwn(messages,item.code)?item.code:'RENDER_INCOMPLETE';
   const severity=item.severity==='warning'?'warning':'error';
   const index=slides.findIndex(s=>s.id===item.slideId);
+  const explicit=Number.isInteger(item.slideNumber)&&item.slideNumber>0&&item.slideNumber<=200?item.slideNumber:null;
   const known=code==='UNSUPPORTED_OBJECT'&&severity==='error'?knownObjectErrors.get(item.message):null;
-  return {code,severity,message:known||(severity==='warning'&&warnings[code])||messages[code],slideNumber:index<0?null:index+1};
+  const result={code,severity,message:known||(severity==='warning'&&warnings[code])||messages[code],slideNumber:index<0?explicit:index+1};
+  if(Object.hasOwn(reasons,item.reasonKey)){
+    result.reasonKey=item.reasonKey;result.reason=reasons[item.reasonKey];
+    const name=safeLabel(item.objectName),font=safeLabel(item.fontFamily);
+    if(name)result.objectName=name;
+    if(font)result.fontFamily=font;
+    if(objectTypes.has(item.objectType))result.objectType=item.objectType;
+  }
+  return result;
 }

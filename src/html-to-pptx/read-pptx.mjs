@@ -54,11 +54,14 @@ function themeBackground(ref,theme,master,overrides){
 }
 
 // Strict subset reader. No Office process, document code, network or disk extraction.
-export async function readPptx(bytes){
+export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}={}){
+  const selectedFont=({'malgun-gothic':'Malgun Gothic',pretendard:'Pretendard'})[fontPolicy];
+  const objectContexts=new Map();
   const diagnostics=[],model={version:1,sourceDigest:sha256(bytes??''),slides:[],assets:[]};
   const fail=(code,message,slideId=null,nodeId=null)=>diagnostics.push(diagnostic(code,message,{slideId,nodeId}));
   const done=()=>{const failed=diagnostics.some(d=>d.severity==='error');return {status:failed?'failed':'parsed',model:failed?null:model,diagnostics};};
   try{
+    if(!['original','malgun-gothic','pretendard'].includes(fontPolicy)||typeof allowPartial!=='boolean')throw new Error('PPTX 가져오기 옵션이 올바르지 않습니다.');
     if(!(bytes instanceof Uint8Array)||bytes.length<22||bytes.length>64*1024*1024)throw new Error('PPTX 바이트는 64MiB 이내여야 합니다.');
     // Every connected XLSX consumes the same package-wide expansion budget.
     const budget=createPackageBudget(),parts=unzipBudgeted(bytes,{budget});
@@ -127,8 +130,11 @@ export async function readPptx(bytes){
           const id=node.getAttributeNS(R,'id'),target=presRels.get(id);
           if(!id||!fontRels.has(id)||!target?.startsWith('ppt/fonts/')||!parts[target])reject('FONT_INVALID','내장 글꼴 관계 또는 파일이 없습니다.');
           const contentType=contentTypeFor(target);
-          if(contentType!=='application/x-fontdata')reject('FONT_FORMAT_UNSUPPORTED','내장 글꼴 ContentType을 지원하지 않습니다.');
           if(!used.has(target)){total+=parts[target].length;used.add(target);}if(total>32*1024*1024)reject('FONT_ASSET_LIMIT','내장 글꼴 합계가 32 MiB를 초과했습니다.');
+          // Explicit replacement never decodes or redistributes the embedded font.
+          // Relationship, structure and package/face byte limits still apply.
+          if(selectedFont){diagnostics.push({...diagnostic('PPTX_FONT_REPLACED','선택한 글꼴을 사용하며 원본 내장 글꼴 파일은 포함하지 않습니다.',{},'warning'),fontFamily:family,objectType:'font',reasonKey:'PPTX_EMBEDDED_FONT_IGNORED'});continue;}
+          if(contentType!=='application/x-fontdata')reject('FONT_FORMAT_UNSUPPORTED','내장 글꼴 ContentType을 지원하지 않습니다.');
           if(!cached.has(target))cached.set(target,unwrapPptxFont(parts[target]));
           const {bytes:fontBytes,meta}=cached.get(target),permission=decideFontEmbedding(meta,{forEditing:true,subset:false});
           if(!permission.allowed)reject(permission.reason,'이 내장 글꼴은 편집용으로 사용할 수 없습니다.');
@@ -143,7 +149,12 @@ export async function readPptx(bytes){
     for(const [index,ref] of slideRefs.entries()){
       const file=presRels.get(attr(ref,'r:id')),doc=xml(file),rels=relationships(file),tree=all(doc,'spTree')[0];
       const slide={id:`slide-${index+1}`,widthCssPx:px(model.pptxSizeEmu.width),heightCssPx:px(model.pptxSizeEmu.height),background:{color:'#ffffff',image:'none'},nodes:[]};model.slides.push(slide);
-      const issue=(message,nodeId=null)=>fail('UNSUPPORTED_OBJECT',message,slide.id,nodeId);
+      let activeNodeId=null;
+      const issue=(message,nodeId=null,explicitReason=null)=>{
+        nodeId??=activeNodeId;
+        const reasonKey=/테마 배경|단색 외의 PPT 배경/.test(message)?'PPTX_THEME_BACKGROUND_UNSUPPORTED':/마스터·레이아웃/.test(message)?'PPTX_MASTER_ARTWORK_UNSUPPORTED':/타이밍·전환/.test(message)?'PPTX_ANIMATION_UNSUPPORTED':/회전·뒤집힌/.test(message)?'PPTX_OBJECT_ROTATION_UNSUPPORTED':/객체 위치/.test(message)?'PPTX_OBJECT_POSITION_UNSUPPORTED':/그룹/.test(message)?'PPTX_GROUP_TRANSFORM_UNSUPPORTED':/그림/.test(message)?'PPTX_IMAGE_UNSUPPORTED':/도형·채움·효과|도형 채움/.test(message)?'PPTX_SHAPE_EFFECT_UNSUPPORTED':/글꼴|텍스트|글자|문단|글머리/.test(message)?'PPTX_TEXT_STYLE_UNSUPPORTED':'PPTX_OBJECT_UNSUPPORTED';
+        diagnostics.push({...diagnostic('UNSUPPORTED_OBJECT',message,{slideId:slide.id,nodeId}),slideNumber:index+1,...(objectContexts.get(`${slide.id}:${nodeId}`)??{objectType:'background'}),reasonKey:explicitReason??reasonKey,recoverable:true});
+      };
       const inherited=new Set([...rels.values()].filter(p=>p.startsWith('ppt/slideLayouts/')));
       for(const layout of [...inherited])for(const target of relationships(layout).values())if(target.startsWith('ppt/slideMasters/'))inherited.add(target);
       for(const part of inherited){
@@ -183,8 +194,8 @@ export async function readPptx(bytes){
           textOutline={color:color(child(outline,'solidFill')),width:px(num(outline,'w'))};
         }
         const font=attr(latin,'typeface'),sizePt=Number(get('sz'))/100;
-        if(!font||font.startsWith('+')||!Number.isFinite(sizePt)||sizePt<=0)issue('명시적 글꼴·크기가 없는 상속 텍스트는 아직 지원하지 않습니다.',id);
-        return {fontFamily:font??'',fontSize:sizePt*4/3,fontWeight:get('b')==='1'?700:400,fontStyle:get('i')==='1'?'italic':'normal',color:color(child(rPr,'solidFill')??child(def,'solidFill'),'#000000'),letterSpacing:Number(get('spc')??0)/100*4/3,textDecoration:get('u')&&get('u')!=='none'?'underline':'none',...(textOutline?{outline:textOutline}:{})};
+        if((!selectedFont&&(!font||font.startsWith('+')))||!Number.isFinite(sizePt)||sizePt<=0)issue('명시적 글꼴·크기가 없는 상속 텍스트는 아직 지원하지 않습니다.',id);
+        return {fontFamily:selectedFont??font??'',fontSize:sizePt*4/3,fontWeight:get('b')==='1'?700:400,fontStyle:get('i')==='1'?'italic':'normal',color:color(child(rPr,'solidFill')??child(def,'solidFill'),'#000000'),letterSpacing:Number(get('spc')??0)/100*4/3,textDecoration:get('u')&&get('u')!=='none'?'underline':'none',...(textOutline?{outline:textOutline}:{})};
       };
       for(const [pi,p] of paras.entries()){
         const pPr=child(p,'pPr');if(elements(pPr).some(n=>/^bu/.test(n.localName)&&n.localName!=='buNone'))issue('글머리표는 아직 지원하지 않습니다.',id);
@@ -206,9 +217,13 @@ export async function readPptx(bytes){
           if(++objectCount>10000)throw new Error('장표 객체 한도를 초과했습니다.');
           const nv=all(object,'cNvPr')[0],base=attr(nv,'name')||`object-${attr(nv,'id',String(objectCount))}`;
           let id=base,suffix=1;while(seen.has(id))id=`${base}-${suffix++}`;seen.add(id);
+          activeNodeId=id;
+          objectContexts.set(`${slide.id}:${id}`,{objectName:base,objectType:object.localName==='pic'?'image':object.localName==='grpSp'?'group':object.localName==='graphicFrame'?(all(object,'tbl').length?'table':'chart'):all(object,'t').length?'text':'shape'});
           if(!['sp','cxnSp','pic','grpSp','graphicFrame'].includes(object.localName)){issue('이 객체는 아직 지원하지 않습니다.',id);continue;}
           const group=object.localName==='grpSp',pr=child(object,group?'grpSpPr':'spPr'),xfrm=object.localName==='graphicFrame'?child(object,'xfrm'):child(pr,'xfrm');
           if(!xfrm){issue('마스터에 상속된 객체 위치는 아직 지원하지 않습니다.',id);continue;}
+          const position=child(xfrm,'off'),extent=child(xfrm,'ext'),isLine=object.localName==='cxnSp'||attr(child(pr,'prstGeom'),'prst')==='line';
+          if(!position||!extent||!['x','y'].every(k=>Number.isFinite(num(position,k,NaN)))||!['cx','cy'].every(k=>Number.isFinite(num(extent,k,NaN))&&(isLine?num(extent,k)>=0:num(extent,k)>0))||!Number.isFinite(num(xfrm,'rot')))throw new Error('객체 좌표·크기·회전값이 잘못되었습니다.');
           if(num(xfrm,'rot')!==0||(!['cxnSp'].includes(object.localName)&&!['line'].includes(attr(child(pr,'prstGeom'),'prst'))&&(num(xfrm,'flipH')||num(xfrm,'flipV')))){issue('회전·뒤집힌 객체는 아직 지원하지 않습니다.',id);continue;}
           const off=child(xfrm,'off'),ext=child(xfrm,'ext');
           const raw={x:num(off,'x'),y:num(off,'y'),w:num(ext,'cx'),h:num(ext,'cy')};
@@ -237,12 +252,15 @@ export async function readPptx(bytes){
             if(parentId){issue('중첩 그룹은 아직 지원하지 않습니다.',id);continue;}
             node.kind='group';slide.nodes.push(node);
             const co=child(xfrm,'chOff'),ce=child(xfrm,'chExt'),sx=raw.w/num(ce,'cx'),sy=raw.h/num(ce,'cy');
-            if(!Number.isFinite(sx)||sx<=0||Math.abs(sx-sy)>1e-7){issue('비균일 그룹 배율은 지원하지 않습니다.',id);continue;}
+            if(!Number.isFinite(sx)||!Number.isFinite(sy)||sx<=0||sy<=0)throw new Error('그룹 좌표·배율이 잘못되었습니다.');
+            if(Math.abs(sx-sy)>1e-7){issue('비균일 그룹 배율은 지원하지 않습니다.',id);continue;}
             if(Math.abs(sx-1)>1e-7){issue('배율이 적용된 그룹의 글자·선 굵기는 아직 보존할 수 없습니다.',id);continue;}
             visit(object,id,{sx,sy,tx:raw.x-num(co,'x')*sx,ty:raw.y-num(co,'y')*sy});continue;
           }
           const unsupported=['custGeom','gradFill','pattFill','blipFill','effectDag','scene3d','sp3d'];
-          if(elements(pr).some(n=>unsupported.includes(n.localName))||elements(child(pr,'effectLst')).length)issue('복잡한 도형·채움·효과는 아직 지원하지 않습니다.',id);
+          if(child(pr,'gradFill'))issue('도형 그라데이션 채움은 아직 지원하지 않습니다.',id,'PPTX_SHAPE_GRADIENT_UNSUPPORTED');
+          if(child(pr,'custGeom'))issue('자유형 벡터 경로 도형은 아직 지원하지 않습니다.',id,'PPTX_CUSTOM_GEOMETRY_UNSUPPORTED');
+          if(elements(pr).some(n=>unsupported.includes(n.localName)&&!['gradFill','custGeom'].includes(n.localName))||elements(child(pr,'effectLst')).length)issue('복잡한 도형·채움·효과는 아직 지원하지 않습니다.',id);
           const objectStyle=child(object,'style');
           if((child(objectStyle,'fillRef')&&!elements(pr).some(n=>['solidFill','noFill','blipFill','gradFill','pattFill','grpFill'].includes(n.localName)))||
              (child(objectStyle,'lnRef')&&!child(pr,'ln'))||num(child(objectStyle,'effectRef'),'idx')!==0)issue('상속된 도형 채움·선·효과는 아직 지원하지 않습니다.',id);
@@ -254,7 +272,8 @@ export async function readPptx(bytes){
               crop=Object.fromEntries([['left','l'],['top','t'],['right','r'],['bottom','b']].map(([key,name])=>[key,num(rect,name)]));
               const fillRect=child(child(blipFill,'stretch'),'fillRect');
               const valid=Object.values(crop).every(v=>Number.isInteger(v)&&v>=0&&v<100000)&&crop.left+crop.right<100000&&crop.top+crop.bottom<100000;
-              if(!valid||!child(blipFill,'stretch')||fillRect&&['l','t','r','b'].some(side=>num(fillRect,side)!==0))issue('이 그림의 자르기 또는 채우기는 지원하지 않습니다.',id);
+              if(!valid)throw new Error('그림 자르기 좌표가 잘못되었습니다.');
+              if(!child(blipFill,'stretch')||fillRect&&['l','t','r','b'].some(side=>num(fillRect,side)!==0))issue('이 그림의 자르기 또는 채우기는 지원하지 않습니다.',id);
               if(!Object.values(crop).some(Boolean))crop=undefined;
             }
             if(!target||!parts[target]){issue('내장 그림 자산이 없습니다.',id);continue;}
@@ -295,6 +314,38 @@ export async function readPptx(bytes){
       if(!name.endsWith('/')&&(/(?:^|\/)embeddings\//i.test(name)||contentTypeFor(name)==='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')&&!usedWorkbooks.has(name))throw new Error('현재 차트에 연결되지 않은 내장 문서는 지원하지 않습니다.');
     }
     for(const [owner,records] of relationCache)for(const relation of records.values())if(relation.type===`${R}/package`&&(!usedCharts.has(owner)||!usedWorkbooks.has(relation.target)))throw new Error('검증한 차트 workbook 외의 패키지 관계는 지원하지 않습니다.');
+    if(selectedFont){
+      for(const slide of model.slides){
+        const replaceStyle=style=>{if(style&&typeof style.fontFamily==='string')style.fontFamily=selectedFont;};
+        for(const node of slide.nodes){
+          replaceStyle(node.style);for(const run of node.content.runs??[])replaceStyle(run.style);
+          for(const cell of node.content.cells??[]){replaceStyle(cell.style);for(const run of cell.runs??[])replaceStyle(run.style);}
+        }
+        diagnostics.push({...diagnostic('PPTX_FONT_REPLACED','선택한 글꼴로 텍스트를 바꿨습니다. 설치 여부와 줄바꿈·배치를 확인해 주세요.',{slideId:slide.id},'warning'),slideNumber:model.slides.indexOf(slide)+1,objectType:'font',fontFamily:selectedFont,reasonKey:'PPTX_FONT_SELECTED'});
+      }
+    }
+    if(allowPartial){
+      // Recover only known representation limitations. Parser/security/limit and
+      // malformed-object errors are never downgraded.
+      for(const slide of model.slides){
+        const recoverable=diagnostics.filter(d=>d.slideId===slide.id&&d.code==='UNSUPPORTED_OBJECT'&&d.severity==='error'&&d.recoverable===true);
+        const bad=new Set(recoverable.map(d=>d.nodeId).filter(Boolean));let changed=true;
+        while(changed){changed=false;for(const n of slide.nodes)if(bad.has(n.parentId)&&!bad.has(n.id)){bad.add(n.id);changed=true;}}
+        const oldNodes=new Map(slide.nodes.map(n=>[n.id,n]));slide.nodes=slide.nodes.filter(n=>!bad.has(n.id));
+        const groups=new Map();for(const d of recoverable){const key=d.nodeId??'slide-background';if(!groups.has(key))groups.set(key,[]);groups.get(key).push(d);}
+        let offset=0;for(const [key,items] of groups){
+          const old=oldNodes.get(key),candidate=old?.boxCssPx;
+          const valid=candidate&&Object.values(candidate).every(Number.isFinite)&&candidate.w>0&&candidate.h>0;
+          const box=valid?{...candidate}:{x:16,y:16+offset,w:Math.max(40,slide.widthCssPx-32),h:72};offset+=80;
+          const text='[변환하지 못한 '+(items[0].objectType==='background'?'배경/효과':'객체')+'] '+items.map(d=>d.message).filter((x,i,a)=>a.indexOf(x)===i).join(' ');
+          let id=`partial-placeholder-${offset}-${slide.nodes.length}`;while(slide.nodes.some(n=>n.id===id))id+='-';
+          const style={fontFamily:selectedFont??'Malgun Gothic',fontSize:14,fontWeight:400,fontStyle:'normal',color:'#b91c1c',fill:'transparent',stroke:'transparent',strokeWidth:0,opacity:1,lineHeight:'normal',whiteSpace:'pre-wrap',padding:{left:0,right:0,top:0,bottom:0},align:'left',valign:'top',letterSpacing:0,textDecoration:'none'};
+          slide.nodes.push({id,kind:'text',boxCssPx:box,zOrder:10000+offset,content:{text,runs:[{text,style:{...style}}]},style,parentId:null,sourceRef:{slideId:slide.id,elementId:id}});
+          for(const d of items){d.code='PPTX_OBJECT_PLACEHOLDER';d.severity='warning';}
+        }
+      }
+    }
+    for(const d of diagnostics){if(d.slideId&&!d.slideNumber){const index=model.slides.findIndex(s=>s.id===d.slideId);if(index>=0)d.slideNumber=index+1;}if(d.nodeId)Object.assign(d,objectContexts.get(`${d.slideId}:${d.nodeId}`)??{});}
     for(const e of validateModel(model).errors)fail('INPUT_INVALID',`${e.path}: ${e.message}`);
   }catch(e){fail(typeof e.code==='string'&&(/^(FONT_|CHART_)/.test(e.code)||e.code==='LIMIT_EXCEEDED')?e.code:'INPUT_INVALID',e.message);}
   return done();
