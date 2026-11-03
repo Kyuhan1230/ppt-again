@@ -41,25 +41,22 @@
           </div>
         </details>
         <fieldset id="pptx-options" aria-label="PPTX 가져오기 옵션" hidden>
-          <label for="pptx-font-policy">HTML 기본 글꼴</label>
+          <div class="font-label-row">
+            <label for="pptx-font-policy">HTML 기본 글꼴</label>
+            <span class="hint-wrap"><button type="button" class="hint-button" aria-label="글꼴 변경 안내" aria-describedby="font-policy-hint">?</button><span id="font-policy-hint" class="hint-tooltip" role="tooltip">텍스트·표·차트 글꼴을 통일합니다. 글꼴 파일은 새로 포함하지 않습니다. 보는 PC에 해당 글꼴이 없으면 다른 글꼴로 표시되며, 줄바꿈과 배치가 달라질 수 있습니다.</span></span>
+          </div>
           <select id="pptx-font-policy">
             <option value="original">원본 글꼴 유지</option>
             <option value="malgun-gothic">맑은 고딕으로 변경</option>
             <option value="pretendard">Pretendard로 변경</option>
           </select>
-          <details class="inline-help">
-            <summary>글꼴을 바꾸면?</summary>
-            <p>텍스트·표·차트 글꼴을 통일합니다. 글꼴 파일은 새로 포함하지 않습니다. 보는 PC에 해당 글꼴이 없으면 다른 글꼴로 표시되며, 줄바꿈과 배치가 달라질 수 있습니다.</p>
-          </details>
-          <label class="check-option" for="pptx-allow-partial">
-            <input id="pptx-allow-partial" type="checkbox" checked>
-            <span>지원되는 내용 먼저 가져오기</span>
-          </label>
-          <p class="important-note">미지원 내용은 표시 상자로 남습니다.</p>
-          <details class="inline-help">
-            <summary>부분 변환 범위</summary>
-            <p>변환할 수 있는 내용은 유지하고, 옮기지 못한 객체와 배경은 표시와 진단으로 남깁니다. 손상되거나 안전하지 않은 파일은 변환하지 않습니다.</p>
-          </details>
+          <div class="check-row">
+            <label class="check-option" for="pptx-allow-partial">
+              <input id="pptx-allow-partial" type="checkbox" checked>
+              <span>지원되는 내용 먼저 가져오기</span>
+            </label>
+            <span class="hint-wrap"><button type="button" class="hint-button" aria-label="부분 변환 안내" aria-describedby="partial-import-hint">?</button><span id="partial-import-hint" class="hint-tooltip" role="tooltip">미지원 내용은 표시 상자로 남습니다. 변환할 수 있는 내용은 유지하고, 옮기지 못한 객체와 배경은 표시와 진단으로 남깁니다. 손상되거나 안전하지 않은 파일은 변환하지 않습니다.</span></span>
+          </div>
         </fieldset>
         <button type="submit" id="analyze-button" disabled>다시 분석</button>
         <p class="privacy">원본 파일은 변경하지 않습니다.</p>
@@ -95,11 +92,10 @@
         <p id="slide-detail" class="help"></p>
       </div>
       <p id="quality-note" class="quality-note">HTML 미리보기입니다. 원본 PowerPoint 화면은 아닙니다.</p>
-      <section id="diagnostics" hidden aria-labelledby="diagnostic-heading">
-        <div class="diagnostic-heading-row"><h3 id="diagnostic-heading">확인할 내용</h3><span class="meta-label">원인별로 묶어 표시</span></div>
-        <div id="diagnostic-summary" aria-live="polite"></div>
+      <details id="diagnostics" hidden>
+        <summary><span id="diagnostic-heading">확인할 내용</span><span id="diagnostic-summary" aria-live="polite"></span></summary>
         <ul id="diagnostic-list"></ul>
-      </section>
+      </details>
     </section>
   </div>
 </main>

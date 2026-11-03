@@ -1,6 +1,9 @@
 import {renderDiagnostics,validBounds} from './diagnostic-view.js';
 import {selectedFileState,sourceType} from './input-policy.js';
 const $=id=>document.getElementById(id);
+const hints=[...document.querySelectorAll('.hint-wrap')];
+for(const hint of hints){for(const event of ['pointerenter','focusin','click'])hint.addEventListener(event,()=>{delete hint.dataset.dismissed;});}
+document.addEventListener('keydown',event=>{if(event.key==='Escape')for(const hint of hints)if(hint.matches(':hover')||hint.contains(document.activeElement))hint.dataset.dismissed='true';});
 $('quality-note').hidden=true;
 let revision=0,controller=null,currentJob=null,busy=false;
 let sessionReady=null;
@@ -29,7 +32,7 @@ function describeDirection(){
 function status(state,message){document.body.dataset.phase=state;$('status-badge').dataset.state=state;$('status-badge').textContent=labels[state];$('status-message').textContent=message;}
 function clearDownload(){$('download-button').disabled=true;$('download-button').hidden=false;$('download-button').textContent=downloadLabel();$('partial-download-button').hidden=true;$('partial-download-button').disabled=true;$('partial-download-note').hidden=true;}
 function jobActions(){$('cancel-button').disabled=!busy;$('delete-button').disabled=!currentJob||busy;}
-function reset(){revision++;controller?.abort();if(currentJob)void apiPost(`/api/jobs/${currentJob.id}`,undefined,undefined,'DELETE').catch(()=>{});currentJob=null;busy=false;durationNotice(null);jobActions();const file=$('html-file').files[0],selection=selectedFileState(file),type=selection.type;$('analyze-button').disabled=!selection.valid;$('analyze-button').textContent='다시 분석';describeDirection();clearDownload();$('preview-area').hidden=true;$('quality-note').hidden=true;$('empty-preview').hidden=false;$('empty-preview').querySelector('p').textContent='파일을 분석하면 미리보기가 표시됩니다.';$('diagnostics').hidden=true;$('diagnostic-list').replaceChildren();$('preview-image').removeAttribute('src');$('file-label').textContent=file?.name??'파일을 여기에 놓거나 선택하세요';status(file&&!selection.valid?'failed':selection.valid?'ready':'idle',selection.message);}
+function reset(){revision++;controller?.abort();if(currentJob)void apiPost(`/api/jobs/${currentJob.id}`,undefined,undefined,'DELETE').catch(()=>{});currentJob=null;busy=false;durationNotice(null);jobActions();const file=$('html-file').files[0],selection=selectedFileState(file),type=selection.type;$('analyze-button').disabled=!selection.valid;$('analyze-button').textContent='다시 분석';describeDirection();clearDownload();$('preview-area').hidden=true;$('quality-note').hidden=true;$('empty-preview').hidden=false;$('empty-preview').querySelector('p').textContent='파일을 분석하면 미리보기가 표시됩니다.';$('diagnostics').hidden=true;$('diagnostics').open=false;$('diagnostic-list').replaceChildren();$('preview-image').removeAttribute('src');$('file-label').textContent=file?.name??'파일을 여기에 놓거나 선택하세요';status(file&&!selection.valid?'failed':selection.valid?'ready':'idle',selection.message);}
 $('html-file').addEventListener('change',()=>{reset();if(selectedFileState($('html-file').files[0]).valid)$('analyze-form').requestSubmit();});
 for(const id of ['assets','asset-folder','selector','pptx-font-policy','pptx-allow-partial'])$(id).addEventListener('change',()=>{reset();if(selectedFileState($('html-file').files[0]).valid)status('ready','설정이 바뀌었습니다. 다시 분석을 눌러 적용하세요.');});
 const dropArea=document.querySelector('.file-area');
@@ -70,7 +73,7 @@ function showResult(job){
 }
 $('analyze-form').addEventListener('submit',async event=>{
   event.preventDefault();const file=$('html-file').files[0];if(!file||$('analyze-button').disabled)return;
-  const thisRevision=++revision,previousJob=currentJob;controller?.abort();controller=new AbortController();const signal=controller.signal;currentJob=null;busy=true;jobActions();clearDownload();$('preview-area').hidden=true;$('quality-note').hidden=true;$('empty-preview').hidden=false;$('empty-preview').querySelector('p').textContent='입력을 분석하고 있습니다.';$('preview-image').removeAttribute('src');$('analyze-button').disabled=true;$('analyze-button').textContent='장표를 분석하고 있습니다…';status('analyzing','글꼴과 이미지를 읽고 실제 장표 배치를 확인하고 있습니다.');$('diagnostics').hidden=true;
+  const thisRevision=++revision,previousJob=currentJob;controller?.abort();controller=new AbortController();const signal=controller.signal;currentJob=null;busy=true;jobActions();clearDownload();$('preview-area').hidden=true;$('quality-note').hidden=true;$('empty-preview').hidden=false;$('empty-preview').querySelector('p').textContent='입력을 분석하고 있습니다.';$('preview-image').removeAttribute('src');$('analyze-button').disabled=true;$('analyze-button').textContent='장표를 분석하고 있습니다…';status('analyzing','글꼴과 이미지를 읽고 실제 장표 배치를 확인하고 있습니다.');$('diagnostics').hidden=true;$('diagnostics').open=false;
   const noticeTimer=setTimeout(()=>{if(thisRevision===revision&&!signal.aborted&&$('duration-note').hidden){$('duration-note').textContent='장표를 분석하는 데 시간이 걸리고 있어요. 잠시만 기다려 주세요.';$('duration-note').hidden=false;}},20000);
   try{
     if(previousJob)await apiPost(`/api/jobs/${previousJob.id}`,undefined,undefined,'DELETE');

@@ -202,7 +202,7 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
           }):null;
           const runs=paragraphs?paragraphs.flatMap(({element,parts},i)=>{const separator={text:'\n',style:parts[0]?.style??plainStyle(getComputedStyle(element))};return i?[separator,...parts]:parts;}):simpleCellBlocks(cell)?[...cell.children].flatMap((e,i)=>{const parts=textRuns(e);return i&&parts.length?[{text:'\n',style:parts[0].style},...parts]:parts;}):textRuns(cell);
           const text=paragraphs?paragraphs.map(p=>p.text).join('\n'):cell.innerText;
-          if(generatedParagraphs&&!diagnostics.some(d=>d.code==='PARAGRAPH_SPACING_APPROXIMATED'&&d.slideId===id&&d.nodeId===table.dataset.sourceId))diagnostics.push({code:'PARAGRAPH_SPACING_APPROXIMATED',severity:'warning',slideId:id,nodeId:table.dataset.sourceId,sourceRef:{slideId:id,elementId:table.dataset.sourceId},message:'표 문단의 들여쓰기와 간격은 PPT로 다시 저장할 때 일부 달라질 수 있습니다.'});
+          if(generatedParagraphs&&!diagnostics.some(d=>d.code==='PARAGRAPH_SPACING_APPROXIMATED'&&d.slideId===id&&d.nodeId===table.dataset.sourceId))diagnostics.push({code:'PARAGRAPH_SPACING_APPROXIMATED',reasonKey:'HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED',severity:'warning',slideId:id,nodeId:table.dataset.sourceId,sourceRef:{slideId:id,elementId:table.dataset.sourceId},message:'표 문단의 들여쓰기와 간격은 PPT로 다시 저장할 때 일부 달라질 수 있습니다.'});
           for(const side of ['top','right','bottom','left']){
             const encoded=cell.getAttribute(`data-pptx-inset-${side}`);if(encoded===null)continue;
             const inset=Number(encoded),borderWidth=parseFloat(cs[`border${side[0].toUpperCase()+side.slice(1)}Width`]);
@@ -280,9 +280,9 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
       if(el.hasAttribute('data-placeholder-marker'))diagnostics.push({code:'SOURCE_PLACEHOLDER_PRESENT',severity:'warning',slideId:id,nodeId,sourceRef,message:'이 HTML에는 원본에서 변환하지 못한 객체의 표시가 있습니다. 다시 만든 PPT에는 상세 설명이 포함되지 않으므로 원본과 비교해 보완해 주세요.'});
       if(el.hasAttribute('data-duotone-baked'))diagnostics.push({code:'PPTX_IMAGE_DUOTONE_BAKED',severity:'warning',slideId:id,nodeId,sourceRef,message:'듀오톤 색상 효과를 그림에 적용했습니다. 효과를 별도 설정으로 편집할 수 없습니다.'});
       if(el.hasAttribute('data-snip-background'))diagnostics.push({code:'PPTX_SHAPE_IMAGE_APPROXIMATED',severity:'warning',slideId:id,nodeId,sourceRef,message:'잘린 모서리 배경은 그림이며 글자는 별도로 편집할 수 있습니다.'});
-      if(el.hasAttribute('data-pptx-outer-shadow')&&st.boxShadow!=='none')diagnostics.push({code:'PPTX_SHADOW_OMITTED',severity:'warning',slideId:id,nodeId,sourceRef,message:'HTML의 바깥 그림자는 PPT로 다시 저장할 때 빠집니다.'});
+      if(el.hasAttribute('data-pptx-outer-shadow')&&st.boxShadow!=='none')diagnostics.push({code:'PPTX_SHADOW_OMITTED',reasonKey:'HTML_PPTX_SHADOW_OMITTED',severity:'warning',slideId:id,nodeId,sourceRef,message:'HTML의 바깥 그림자는 PPT로 다시 저장할 때 빠집니다.'});
       if(el.hasAttribute('data-preset-vector'))diagnostics.push({code:'PPTX_SHAPE_IMAGE_APPROXIMATED',severity:'warning',slideId:id,nodeId,sourceRef,message:'HTML에서는 SVG 도형을 편집할 수 있지만, 다시 만든 PPT에서는 그림으로 저장되어 개별 편집할 수 없습니다.'});
-      if(el.dataset.kind==='text'&&el.querySelector('[data-pptx-paragraph]'))diagnostics.push({code:'PARAGRAPH_SPACING_APPROXIMATED',severity:'warning',slideId:id,nodeId,sourceRef,message:'HTML의 문단별 간격과 정렬은 PPT로 다시 저장할 때 일부 달라질 수 있습니다.'});
+      if(el.dataset.kind==='text'&&el.querySelector('[data-pptx-paragraph]'))diagnostics.push({code:'PARAGRAPH_SPACING_APPROXIMATED',reasonKey:'HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED',severity:'warning',slideId:id,nodeId,sourceRef,message:'HTML의 문단별 간격과 정렬은 PPT로 다시 저장할 때 일부 달라질 수 있습니다.'});
       if(['CANVAS','IFRAME','VIDEO','AUDIO','OBJECT','EMBED'].includes(el.tagName)){at('UNSUPPORTED_OBJECT',`${el.tagName} 객체는 지원하지 않습니다.`);continue;}
       if(profile!=='project-data-v1'&&((el!==root&&st.transform!=='none')||st.filter!=='none'||st.perspective!=='none'||st.clipPath!=='none'||st.animationName!=='none'))at('UNSUPPORTED_OBJECT','객체의 CSS 변환·필터·클리핑·애니메이션을 지원하지 않습니다.');
       if(Number(st.opacity)<1&&el.children.length)at('UNSUPPORTED_OBJECT','여러 자식을 합성하는 컨테이너의 투명도는 지원하지 않습니다.');

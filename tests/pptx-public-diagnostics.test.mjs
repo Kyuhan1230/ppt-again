@@ -30,3 +30,9 @@ test('preview bounds expose only validated normalized rectangles',()=>{
  assert.deepEqual(publicDiagnostic({...base,bounds:{x:.1,y:.2,w:.3,h:.4}}).bounds,{x:.1,y:.2,w:.3,h:.4});
  for(const bounds of [{x:-1,y:0,w:1,h:1},{x:0,y:0,w:Infinity,h:1},{x:0,y:0,w:2,h:1},{x:0,y:0,w:0,h:1},{x:'0',y:0,w:1,h:1}])assert.equal(publicDiagnostic({...base,bounds}).bounds,undefined);
 });
+test('PPT re-export warnings describe future loss rather than HTML import loss',()=>{
+ const paragraph=publicDiagnostic({code:'PARAGRAPH_SPACING_APPROXIMATED',severity:'warning',reasonKey:'HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED'});
+ assert.match(paragraph.message,/PPT로 다시 저장할 때/);assert.match(paragraph.reason,/PPT로 다시 저장할 때/);
+ const shadow=publicDiagnostic({code:'PPTX_SHADOW_OMITTED',severity:'warning',reasonKey:'HTML_PPTX_SHADOW_OMITTED'});
+ assert.match(shadow.message,/PPT로 다시 저장할 때/);assert.match(shadow.reason,/PPT로 다시 저장할 때/);
+});

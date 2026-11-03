@@ -68,6 +68,8 @@ const knownObjectErrors=new Map([
 // Fixed reasons plus narrowly bounded labels cross the UI boundary. Never
 // forward exception text, selectors, source paths, or an arbitrary message.
 const reasons={
+  HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED:'PPT로 다시 저장할 때 문단 들여쓰기·간격·정렬이 일부 달라질 수 있습니다.',
+  HTML_PPTX_SHADOW_OMITTED:'HTML에 표시된 바깥 그림자는 PPT로 다시 저장할 때 빠집니다.',
   PPTX_CHART_DATA_MISMATCH:'차트 표시 데이터와 연결된 내장 원자료가 일치하지 않습니다.',
   PPTX_CHART_STRUCTURE_INVALID:'차트 또는 내장 원자료의 구조가 올바르지 않아 검증을 완료하지 못했습니다.',
   PPTX_CHART_LIMIT_EXCEEDED:'차트 데이터가 처리 한도를 초과했습니다.',
@@ -146,12 +148,13 @@ export function publicDiagnostic(item,slides=[]){
   if(item.blocking===true&&severity==='error'){result.blocking=true;result.message='변환 중단: '+result.message;}
   if(Object.hasOwn(reasons,item.reasonKey)){
     result.reasonKey=item.reasonKey;result.reason=reasons[item.reasonKey];
-    if(['PPTX_PARAGRAPH_INDENT_APPROXIMATED','PPTX_LINE_SPACING_APPROXIMATED','PPTX_TEXT_BASELINE_APPROXIMATED','PPTX_PARAGRAPH_ALIGNMENT_APPROXIMATED','PPTX_INHERITED_SIZE_APPROXIMATED','PPTX_AUTONUM_APPROXIMATED','PPTX_TEXT_TAB_APPROXIMATED','PPTX_TEXT_HIGHLIGHT_APPROXIMATED','PPTX_TABLE_TEXT_COLOR_APPROXIMATED','PPTX_EMBEDDED_FONT_LOCAL_ONLY'].includes(item.reasonKey)&&severity==='warning')result.message=reasons[item.reasonKey];
+    if(['HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED','HTML_PPTX_SHADOW_OMITTED','PPTX_PARAGRAPH_INDENT_APPROXIMATED','PPTX_LINE_SPACING_APPROXIMATED','PPTX_TEXT_BASELINE_APPROXIMATED','PPTX_PARAGRAPH_ALIGNMENT_APPROXIMATED','PPTX_INHERITED_SIZE_APPROXIMATED','PPTX_AUTONUM_APPROXIMATED','PPTX_TEXT_TAB_APPROXIMATED','PPTX_TEXT_HIGHLIGHT_APPROXIMATED','PPTX_TABLE_TEXT_COLOR_APPROXIMATED','PPTX_EMBEDDED_FONT_LOCAL_ONLY'].includes(item.reasonKey)&&severity==='warning')result.message=reasons[item.reasonKey];
     if(item.blocking===true&&severity==='error'){result.blocking=true;result.message='변환 중단: '+reasons[item.reasonKey];}
     const name=safeLabel(item.objectName),font=safeLabel(item.fontFamily);
     if(name)result.objectName=name;
     if(font)result.fontFamily=font;
     if(objectTypes.has(item.objectType))result.objectType=item.objectType;
+    if(result.slideNumber&&Number.isInteger(item.objectIndex)&&item.objectIndex>0&&item.objectIndex<=10000)result.objectIndex=item.objectIndex;
     const b=item.bounds;
     if(b&&['x','y','w','h'].every(k=>typeof b[k]==='number'&&Number.isFinite(b[k]))&&b.x>=0&&b.y>=0&&b.w>0&&b.h>0&&b.x+b.w<=1&&b.y+b.h<=1)result.bounds={x:b.x,y:b.y,w:b.w,h:b.h};
   }

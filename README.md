@@ -16,7 +16,7 @@ HTML로 만든 장표를 브라우저에서 발표하고, PPT가 필요할 때 P
 
 <p align="center"><sub>개발 중인 버전의 HTML → PPT 변환 시연입니다.</sub></p>
 
-[AI 에이전트와 사용하기](#ai-에이전트와-사용하기) · [시작하기](#시작하기) · [지원 범위](docs/supported-inputs.md)
+[AI 에이전트와 사용하기](#ai-에이전트와-사용하기) · [시작하기](#시작하기) · [지원 범위](docs/supported-inputs.md) · [시스템 구성도](docs/architecture/README.md)
 
 > **개발 미리보기** · Windows에서 사용할 수 있습니다. 지원 범위와 변환 후 확인할 사항은 [지원 범위](docs/supported-inputs.md)를 참고하세요.
 
