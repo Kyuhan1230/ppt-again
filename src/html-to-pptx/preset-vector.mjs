@@ -1,3 +1,6 @@
+import {DOMParser,XMLSerializer} from '@xmldom/xmldom';
+import {parseFragment} from 'parse5';
+
 // These are structured, bounded primitive shapes, never arbitrary SVG markup.
 // The same generator serves the asset and the editable inline HTML so that
 // visual output and reimport cannot diverge through hidden metadata.
@@ -44,6 +47,29 @@ export function presetVectorMarkup(v){
   return {width,height,body,svg:`<svg xmlns="http://www.w3.org/2000/svg" width="${n(width)}" height="${n(height)}" viewBox="0 0 ${n(width)} ${n(height)}">${body}</svg>`};
 }
 
+// Office renders SVG gradients in sRGB even when linearRGB was requested.
+// Approximate the validated two-stop preset in sRGB with sampled linear light.
+export function officeCompatiblePresetGradient(svg){
+  if(!svg.includes('data-preset-vector')||!svg.includes('linearRGB'))return svg;
+  const doc=new DOMParser().parseFromString(svg,'image/svg+xml');
+  const gradient=doc.getElementsByTagNameNS('http://www.w3.org/2000/svg','linearGradient')[0];
+  if(!gradient||gradient.getAttribute('color-interpolation')!=='linearRGB')return svg;
+  const stops=[...gradient.getElementsByTagNameNS('http://www.w3.org/2000/svg','stop')];
+  if(stops.length!==2||stops[0].getAttribute('offset')!=='0'||stops[1].getAttribute('offset')!=='1')return svg;
+  const colors=stops.map(s=>s.getAttribute('stop-color'));
+  if(!colors.every(c=>/^#[0-9a-f]{6}$/i.test(c)))return svg;
+  const linear=c=>{const v=c/255;return v<=0.04045?v/12.92:((v+0.055)/1.055)**2.4;};
+  const srgb=v=>Math.round(255*(v<=0.0031308?v*12.92:1.055*v**(1/2.4)-0.055));
+  const channels=colors.map(c=>[1,3,5].map(i=>linear(parseInt(c.slice(i,i+2),16))));
+  while(gradient.firstChild)gradient.removeChild(gradient.firstChild);
+  gradient.setAttribute('color-interpolation','sRGB');
+  for(let i=0;i<=16;i++){
+    const t=i/16,color=channels[0].map((x,j)=>srgb(x*(1-t)+channels[1][j]*t).toString(16).padStart(2,'0')).join('');
+    const stop=doc.createElementNS('http://www.w3.org/2000/svg','stop');stop.setAttribute('offset',String(t));stop.setAttribute('stop-color',`#${color}`);gradient.appendChild(stop);
+  }
+  return new XMLSerializer().serializeToString(doc);
+}
+
 // A generated SVG can be edited in HTML, but its input remains restricted to
 // elementary inline geometry: no scripts, resources, references or CSS paints.
 export function validInlinePresetVector(root){
@@ -53,7 +79,7 @@ export function validInlinePresetVector(root){
   const elements=node=>(node.childNodes??[]).filter(n=>n.nodeName!=='#text'||n.value.trim());
   const decimal='[-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?';
   const scalar=value=>typeof value==='string'&&new RegExp(`^${decimal}$`).test(value)&&Number.isFinite(Number(value))&&Math.abs(Number(value))<=100000;
-  if(root.tagName!=='svg'||root.namespaceURI!==ns||!allowed(root,['xmlns','data-source-id','data-parent-id','data-kind','data-preset-vector','viewBox','style']))return false;
+  if(root.tagName!=='svg'||root.namespaceURI!==ns||!allowed(root,['xmlns','data-source-id','data-parent-id','data-kind','data-preset-vector','data-pptx-vector','viewBox','style']))return false;
   const view=(attr(root,'viewBox')??'').trim().split(/[ ,]+/);if(view.length!==4||!view.every(scalar)||Number(view[2])<=0||Number(view[3])<=0)return false;
   const groups=elements(root);let gradientId=null;
   if(groups.length===2){
@@ -84,4 +110,25 @@ export function validInlinePresetVector(root){
     if(i>tokens.length-1)return false;
   }
   return true;
+}
+
+// Metadata only identifies a shape when its actual editable SVG geometry still
+// matches. Edited colors are read from the SVG; changed paths fall back to art.
+export function recoverPresetVector(root){
+  const attr=(n,k)=>n.attrs?.find(a=>a.name===k)?.value;
+  const children=n=>(n.childNodes??[]).filter(x=>x.tagName);
+  let v;try{v=JSON.parse(attr(root,'data-pptx-vector'));}catch{return null;}
+  if(!validPresetVector(v)||!validInlinePresetVector(root))return null;
+  const elems=children(root),g=elems.find(x=>x.tagName==='g'),defs=elems.find(x=>x.tagName==='defs');
+  v={...v,stroke:attr(g,'stroke'),strokeWidth:Number(attr(g,'stroke-width'))};
+  if(defs){const grad=children(defs)[0],stops=children(grad);v.fill='gradient';v.gradient={id:attr(grad,'id'),from:attr(stops[0],'stop-color'),to:attr(stops[1],'stop-color')};}
+  else{v.fill=attr(g,'fill');delete v.gradient;}
+  if(!validPresetVector(v))return null;
+  const canonical=children(parseFragment(presetVectorMarkup(v).svg))[0],cg=children(canonical).find(x=>x.tagName==='g');
+  const a=children(g)[0],b=children(cg)[0];
+  const equivalent=(x,y)=>{const tokenize=s=>String(s).match(/[A-Za-z]+|[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?/g)??[],left=tokenize(x),right=tokenize(y);return left.length===right.length&&left.every((v,i)=>v===right[i]||Number.isFinite(Number(v))&&Number.isFinite(Number(right[i]))&&Math.abs(Number(v)-Number(right[i]))<1e-7);};
+  if(!equivalent(attr(root,'viewBox'),attr(canonical,'viewBox'))||!equivalent(attr(g,'transform'),attr(cg,'transform'))||a.tagName!==b.tagName)return null;
+  const keys=a.tagName==='ellipse'?['cx','cy','rx','ry']:['d'];if(keys.some(k=>!equivalent(attr(a,k),attr(b,k))))return null;
+  if(defs){const grad=children(defs)[0],expected=children(children(canonical).find(x=>x.tagName==='defs'))[0];if(['x1','x2','y1','y2','gradientUnits','color-interpolation'].some(k=>attr(grad,k)!==attr(expected,k)))return null;}
+  return v;
 }

@@ -2,6 +2,25 @@ import {addNativeChart} from '../src/html-to-pptx/write-chart.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';import PptxGenJS from 'pptxgenjs';import {zipSync,unzipSync,strFromU8,strToU8} from 'fflate';import {readPptx} from '../src/html-to-pptx/read-pptx.mjs';import {publicDiagnostic} from '../src/html-to-pptx/public-diagnostics.mjs';import {exportHtml} from '../src/html-to-pptx/export-html.mjs';
 async function fixture(){const p=new PptxGenJS();p.layout='LAYOUT_WIDE';for(let i=0;i<3;i++){const s=p.addSlide();s.background={color:'FFFFFF'};s.addText('Supported sibling '+i,{x:1,y:.5,w:7,h:.5,fontFace:'Arial',fontSize:24,objectName:'safe-'+i});s.addText('Inherited title\nInherited paragraph '+i,{x:1,y:2,w:7,h:2,fontFace:'Arial',fontSize:20,paraSpaceAfter:8,objectName:'inherited-'+i});}const ps=unzipSync(new Uint8Array(await p.write({outputType:'uint8array'})));for(let i=1;i<=3;i++){const key=`ppt/slides/slide${i}.xml`,x=strFromU8(ps[key]),shape=x.match(/<p:sp>[\s\S]*?<\/p:sp>/g)[1];ps[key]=strToU8(x.replace(shape,shape.replace(/\s+sz="[^"]*"/g,'').replace(/typeface="Arial"/g,'typeface="+unsupported"')));}return ps;}
 const patch=(ps,k,fn)=>ps[k]=strToU8(fn(strFromU8(ps[k])));
+async function repeatedSpacingBeforeFatal(){
+ const p=new PptxGenJS(),s=p.addSlide();s.background={color:'FFFFFF'};
+ for(const [text,y] of [['First\nSecond',1],['Third\nFourth',3]])s.addText(text,{x:1,y,w:4,h:2,fontFace:'Arial',fontSize:16,objectName:'same-name'});
+ const parts=unzipSync(new Uint8Array(await p.write({outputType:'uint8array'})));
+ patch(parts,'ppt/slides/slide1.xml',x=>x.replaceAll('<a:pPr indent="0" marL="0">','<a:pPr indent="0" marL="0"><a:spcBef><a:spcPct val="100000"/></a:spcBef>'));
+ parts['ppt/embeddings/unused.xlsx']=zipSync({'[Content_Types].xml':strToU8('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')});
+ return readPptx(zipSync(parts),{allowPartial:true});
+}
+test('paragraph warnings keep their slide and object when a later package error stops parsing',async()=>{
+ const result=await repeatedSpacingBeforeFatal();assert.equal(result.status,'failed');
+ const warning=result.diagnostics.find(d=>d.code==='PARAGRAPH_SPACING_APPROXIMATED');assert.ok(warning,JSON.stringify(result.diagnostics));
+ const shown=publicDiagnostic(warning);assert.equal(shown.slideNumber,1);assert.equal(shown.objectName,'same-name');assert.equal(shown.objectType,'text');
+});
+test('repeated paragraph warnings deduplicate by object while same-named objects remain distinct',async()=>{
+ const result=await repeatedSpacingBeforeFatal(),warnings=result.diagnostics.filter(d=>d.code==='PARAGRAPH_SPACING_APPROXIMATED');
+ assert.equal(warnings.length,2,JSON.stringify(warnings));
+ const shown=warnings.map(d=>publicDiagnostic(d));assert.deepEqual(shown.map(d=>d.objectName),['same-name','same-name']);
+ assert.ok(shown.every(d=>Number.isInteger(d.objectIndex)));assert.notEqual(shown[0].objectIndex,shown[1].objectIndex);
+});
 test('unresolved theme font limitations alone remain recoverable with precise cause',async()=>{const r=await readPptx(zipSync(await fixture()),{allowPartial:true});assert.equal(r.status,'parsed');assert.ok(r.model.slides.every(s=>s.nodes.some(n=>n.id.startsWith('safe-'))));const d=r.diagnostics.find(d=>d.reasonKey==='PPTX_INHERITED_TEXT_UNRESOLVED');assert.ok(d);assert.match(publicDiagnostic(d).reason,/상속된 글꼴 또는 글자 크기/);});
 test('late invalid coordinate yields blocking reason and last-object context, not generic file advice',async()=>{const ps=await fixture();patch(ps,'ppt/slides/slide3.xml',x=>x.replace(/<p:sp>[\s\S]*?<\/p:sp>/g,sp=>sp.includes('inherited-2')?sp.replace(/(<a:ext cx=")[^"]+/,'$1NaN'):sp));const r=await readPptx(zipSync(ps),{allowPartial:true});assert.equal(r.status,'failed');assert.equal(r.model,null);const fatal=r.diagnostics.at(-1);assert.equal(fatal.reasonKey,'PPTX_INVALID_COORDINATES');assert.equal(fatal.slideNumber,3);assert.equal(fatal.objectName,'inherited-2');const pub=publicDiagnostic(fatal);assert.equal(pub.blocking,true);assert.match(pub.message,/^변환 중단:/);assert.equal(pub.slideNumber,3);assert.equal(pub.objectName,'inherited-2');assert.ok(!JSON.stringify(pub).includes('ppt/slides'));});
 test('late unused package failure is global and does not blame last object',async()=>{const ps=await fixture();ps['ppt/embeddings/private-name.xlsx']=zipSync({'[Content_Types].xml':strToU8('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')});const r=await readPptx(zipSync(ps),{allowPartial:true});assert.equal(r.status,'failed');const pub=publicDiagnostic(r.diagnostics.at(-1));assert.equal(pub.reasonKey,'PPTX_UNUSED_EMBEDDED_PACKAGE');assert.equal(pub.blocking,true);assert.equal(pub.slideNumber,null);assert.ok(!pub.objectName);assert.ok(!JSON.stringify(pub).includes('private-name'));});

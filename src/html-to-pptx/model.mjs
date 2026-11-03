@@ -2,6 +2,7 @@ import {canvasDiagnostics} from './canvas.mjs';
 import {validateTable} from './tables.mjs';
 import {validateChart} from './charts.mjs';
 import {validPresetVector} from './preset-vector.mjs';
+import {validTransition} from './transitions.mjs';
 const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const nonempty = v => typeof v === 'string' && v.trim().length > 0;
 const digest = v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
@@ -77,6 +78,7 @@ export function validateModel(value) {
       if (!record(slide)) { check(false, sp, 'Expected slide'); continue; }
       check(nonempty(slide.id) && !slideIds.has(slide.id), `${sp}.id`, 'Slide ID missing or duplicated'); slideIds.add(slide.id);
       if(slide.animationOmitted!==undefined)check(slide.animationOmitted===true,`${sp}.animationOmitted`,'Invalid animation flag');
+      if(slide.transition!==undefined)check(validTransition(slide.transition),`${sp}.transition`,'Invalid slide transition');
       for (const k of ['widthCssPx', 'heightCssPx']) check(Number.isFinite(slide[k]) && slide[k] > 0, `${sp}.${k}`, 'Expected positive finite dimension');
       const nodes = array(slide.nodes, `${sp}.nodes`), byId = new Map();
       for (const [j, n] of nodes.entries()) {
