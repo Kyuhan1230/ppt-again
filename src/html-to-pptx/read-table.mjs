@@ -6,9 +6,14 @@ const attr=(n,k,fallback=null)=>n?.hasAttribute(k)?n.getAttribute(k):fallback;
 const px=(n,k,fallback=0)=>Number(attr(n,k,fallback))/EMU_PER_CSS_PX;
 const A='http://schemas.openxmlformats.org/drawingml/2006/main';
 
-export function readNativeTable(frame,{slideId,sourceId,boxCssPx,readText,readColor}){
+export function readNativeTable(frame,{slideId,sourceId,boxCssPx,readText,readColor,allowPartial=false}){
   const recoverableMessages=new Set(['차트·SmartArt는 아직 표로 읽을 수 없습니다.','세로쓰기·복잡한 표 셀 효과는 지원하지 않습니다.','테마에서 상속된 표 테두리는 지원하지 않습니다.','단색 실선 외의 표 테두리는 지원하지 않습니다.','테마에서 상속된 표 배경은 지원하지 않습니다.']);
-  const diagnostics=[],issue=(message,code='UNSUPPORTED_OBJECT')=>diagnostics.push({...diagnostic(code,message,{slideId,nodeId:sourceId}),recoverable:code==='UNSUPPORTED_OBJECT'&&recoverableMessages.has(message),reasonKey:recoverableMessages.has(message)?'PPTX_TABLE_STYLE_UNSUPPORTED':code==='LIMIT_EXCEEDED'?'PPTX_TABLE_LIMIT_EXCEEDED':'PPTX_TABLE_STRUCTURE_INVALID'});
+  const diagnostics=[],issue=(message,code='UNSUPPORTED_OBJECT')=>{
+    const recoverable=code==='UNSUPPORTED_OBJECT'&&recoverableMessages.has(message);
+    if(allowPartial&&recoverable&&message!=='차트·SmartArt는 아직 표로 읽을 수 없습니다.'){
+      if(!diagnostics.some(d=>d.reasonKey==='PPTX_TABLE_STYLE_APPROXIMATED'))diagnostics.push({...diagnostic('PPTX_TABLE_STYLE_APPROXIMATED','표 내용은 보존했지만 일부 셀 서식은 원본과 다를 수 있습니다.',{slideId,nodeId:sourceId},'warning'),reasonKey:'PPTX_TABLE_STYLE_APPROXIMATED'});
+    }else diagnostics.push({...diagnostic(code,message,{slideId,nodeId:sourceId}),recoverable,reasonKey:recoverable?'PPTX_TABLE_STYLE_UNSUPPORTED':code==='LIMIT_EXCEEDED'?'PPTX_TABLE_LIMIT_EXCEEDED':'PPTX_TABLE_STRUCTURE_INVALID'});
+  };
   const graphic=child(frame,'graphic'),data=child(graphic,'graphicData'),table=child(data,'tbl');
   if(graphic?.namespaceURI!==A||data?.namespaceURI!==A){issue('표 그래픽 구조 또는 네임스페이스가 잘못되었습니다.','INPUT_INVALID');return {node:null,diagnostics};}
   if(attr(data,'uri')!=='http://schemas.openxmlformats.org/drawingml/2006/table'){issue('차트·SmartArt는 아직 표로 읽을 수 없습니다.');return {node:null,diagnostics};}
@@ -46,11 +51,11 @@ export function readNativeTable(frame,{slideId,sourceId,boxCssPx,readText,readCo
       }
       if(themed&&!child(props,'solidFill')&&!child(props,'noFill'))issue('테마에서 상속된 표 배경은 지원하지 않습니다.');
       const style={...text.style,fill:readColor(child(props,'solidFill')),borders,padding:{left:px(props,'marL',91440),right:px(props,'marR',91440),top:px(props,'marT',45720),bottom:px(props,'marB',45720)},valign:({t:'top',ctr:'mid',b:'bottom'})[attr(props,'anchor','t')]};
-      cells.push({row,col,rowSpan,colSpan,text:text.content.text,runs:text.content.runs,style});
+      cells.push({row,col,rowSpan,colSpan,text:text.content.text,runs:text.content.runs,...(text.content.paragraphs?{paragraphs:text.content.paragraphs}:{}),style});
     }
   }
   // PowerPoint can retain the old graphicFrame extent after adding rows. Its
   // visible table size (and native Shape.Width/Height) follows the current grid.
   const bounds={...boxCssPx,w:columnWidthsCssPx.reduce((a,v)=>a+v,0),h:rowHeightsCssPx.reduce((a,v)=>a+v,0)};
-  return {node:diagnostics.length?null:{id:sourceId,kind:'table',boxCssPx:bounds,content:{rows:rows.length,columns:columns.length,columnWidthsCssPx,rowHeightsCssPx,cells},style:{opacity:1}},diagnostics};
+  return {node:diagnostics.some(d=>d.severity==='error')?null:{id:sourceId,kind:'table',boxCssPx:bounds,content:{rows:rows.length,columns:columns.length,columnWidthsCssPx,rowHeightsCssPx,cells},style:{opacity:1}},diagnostics};
 }

@@ -46,6 +46,15 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
   };
   const slides=[],measurements=[];let tableCells=0;
   for(const [slideIndex,root] of roots.entries()) {
+    if(editable)for(const mark of root.querySelectorAll('span[data-pptx-hanging-punct]')){
+      const run=mark.parentElement,paragraph=run?.parentElement,cell=paragraph?.parentElement;
+      const generated=paragraph?.hasAttribute('data-pptx-paragraph')&&['TD','TH'].includes(cell?.tagName);
+      const current=mark.textContent==='.'&&paragraph?.lastChild===run&&run?.lastChild===mark;
+      const presentationOnly=mark.style.display==='inline-block'&&parseFloat(mark.style.width)===0&&parseFloat(mark.style.lineHeight)===0&&mark.style.whiteSpace==='nowrap';
+      // A user may edit or append text after the original final period. Remove
+      // only our own zero-width presentation hint before measuring that edit.
+      if(generated&&!current&&presentationOnly){mark.removeAttribute('data-pptx-hanging-punct');for(const property of ['display','width','line-height','white-space'])mark.style.removeProperty(property);if(parseFloat(mark.style.textIndent)===0)mark.style.removeProperty('text-indent');}
+    }
     const id=(declared?root.dataset.slideId:null)||root.id||`slide-${slideIndex+1}`;
     const rootStyle=getComputedStyle(root),before=root.getBoundingClientRect();
     const width=parseFloat(rootStyle.width),height=parseFloat(rootStyle.height);
@@ -70,14 +79,16 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
     const domWalker=document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT|NodeFilter.SHOW_TEXT);domOrder.set(root,domIndex++);
     while(domWalker.nextNode())domOrder.set(domWalker.currentNode,domIndex++);
     const elements=declared?[...root.querySelectorAll('[data-source-id]')]:[root,...root.querySelectorAll('*')];
+    if(root.hasAttribute('data-animation-omitted'))diagnostics.push({code:'PPTX_ANIMATION_OMITTED',severity:'warning',slideId:id,nodeId:null,sourceRef:null,message:'애니메이션과 화면 전환은 정적 HTML에서 재현되지 않습니다.'});
     if(editable&&[...root.children].some(e=>!e.hasAttribute('data-source-id')))issue('UNSUPPORTED_OBJECT','객체 표식이 없는 장표 콘텐츠가 있습니다.',id);
     const hiddenByOpacity=el=>{for(let p=el;p;p=p.parentElement)if(Number(getComputedStyle(p).opacity)===0)return true;return false;};
-    const plainStyle=st=>({fontFamily:familyName(st.fontFamily),fontSize:parseFloat(st.fontSize),fontWeight:Number(st.fontWeight)||400,fontStyle:st.fontStyle,color:st.color,align:st.textAlign,lineHeight:st.lineHeight,whiteSpace:st.whiteSpace,
+    const plainStyle=st=>({fontFamily:familyName(st.fontFamily),fontSize:parseFloat(st.fontSize),fontWeight:Number(st.fontWeight)||400,fontStyle:st.fontStyle,...(st.fontKerning==='none'?{disableKerning:true}:{}),color:st.color,align:st.textAlign,lineHeight:st.lineHeight,whiteSpace:st.whiteSpace,
       fill:st.backgroundColor,backgroundImage:st.backgroundImage,stroke:st.borderTopColor,strokeWidth:parseFloat(st.borderTopWidth)||0,borderStyle:st.borderTopStyle,radius:parseFloat(st.borderTopLeftRadius)||0,opacity:Number(st.opacity),padding:{top:parseFloat(st.paddingTop),right:parseFloat(st.paddingRight),bottom:parseFloat(st.paddingBottom),left:parseFloat(st.paddingLeft)}});
     const textRuns=el=>{
       const runs=[],walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT|NodeFilter.SHOW_ELEMENT);let child;
       while((child=walker.nextNode())){
         if(child.nodeType!==3&&child.tagName!=='BR')continue;
+        if(child.tagName==='BR'&&child.hasAttribute('data-pptx-empty'))continue;
         const parent=child.nodeType===3?child.parentElement:child;
         if(parent.closest('svg'))continue;
         const cs=getComputedStyle(parent);
@@ -85,6 +96,14 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
         let text=child.nodeType===3?child.data:'\n';
         if(child.nodeType===3&&!['pre','pre-wrap','break-spaces'].includes(cs.whiteSpace))text=text.replace(cs.whiteSpace==='pre-line'?/[\t\r\f ]+/g:/[\t\r\n\f ]+/g,' ');
         const style={fontFamily:familyName(cs.fontFamily),fontSize:parseFloat(cs.fontSize),fontWeight:Number(cs.fontWeight)||400,fontStyle:cs.fontStyle,color:cs.color,textDecoration:cs.textDecorationLine,letterSpacing:cs.letterSpacing};
+        if(cs.fontKerning==='none')style.disableKerning=true;
+        const baselineElement=parent.closest('[data-pptx-baseline]');
+        if(baselineElement&&el.contains(baselineElement)){
+          const baseline=Number(baselineElement.getAttribute('data-pptx-baseline'));
+          if(Number.isInteger(baseline)&&baseline!==0&&Math.abs(baseline)<=100000){style.fontSize*=1.5;style.baseline=baseline;}
+        }
+        const highlightElement=parent.closest('[data-pptx-highlight]');
+        if(highlightElement&&el.contains(highlightElement))style.highlight=getComputedStyle(highlightElement).backgroundColor;
         if(parseFloat(cs.webkitTextStrokeWidth)>0)style.outline={color:cs.webkitTextStrokeColor,width:parseFloat(cs.webkitTextStrokeWidth)};
         if(text)runs.push({text,style});
       }
@@ -113,8 +132,20 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
           return e.tagName==='SPAN'&&inline&&cs.display==='block'&&!visibleColor(cs.backgroundColor)&&['Top','Right','Bottom','Left'].every(side=>parseFloat(cs[`margin${side}`])===0&&parseFloat(cs[`padding${side}`])===0&&parseFloat(cs[`border${side}Width`])===0)&&cs.textAlign===base.textAlign&&cs.lineHeight===base.lineHeight&&(cs.whiteSpace===base.whiteSpace||cs.whiteSpace==='nowrap'&&base.whiteSpace==='normal'&&ink.left>=bounds.left-.1&&ink.right<=bounds.right+.1)&&Number.isFinite(parseFloat(cs.lineHeight))&&Math.abs(parseFloat(cs.height)-parseFloat(cs.lineHeight))<.1&&lines.size===1;
         });
       };
+      const paragraphCellCache=new WeakMap();
+      const generatedCellParagraphs=cell=>{
+        if(!cell||!['TD','TH'].includes(cell.tagName))return false;
+        if(paragraphCellCache.has(cell))return paragraphCellCache.get(cell);
+        const blocks=[...cell.children],valid=editable&&blocks.length>0&&blocks.every(el=>el.tagName==='SPAN'&&el.hasAttribute('data-pptx-paragraph'))&&
+          ![...cell.childNodes].some(node=>node.nodeType===3&&node.textContent.trim());
+        paragraphCellCache.set(cell,valid);return valid;
+      };
       for(const element of [table,...table.querySelectorAll('*')]){
         const cs=getComputedStyle(element);
+        const cell=element.closest('td,th'),paragraph=element.closest('[data-pptx-paragraph]'),generated=generatedCellParagraphs(cell);
+        const paragraphBlock=generated&&element===paragraph&&paragraph.parentElement===cell;
+        const paragraphMarker=generated&&element.hasAttribute('data-pptx-list-marker')&&element.parentElement===paragraph&&paragraph.parentElement===cell;
+        const paragraphPeriod=generated&&element.hasAttribute('data-pptx-hanging-punct')&&element.textContent==='.'&&element.parentElement?.parentElement===paragraph&&paragraph.parentElement===cell&&paragraph.lastChild===element.parentElement&&element.parentElement.lastChild===element;
         const relativeCell=['TD','TH'].includes(element.tagName)&&cs.position==='relative'&&['top','right','bottom','left'].every(side=>cs[side]==='auto'||parseFloat(cs[side])===0);
         if(cs.display==='none'||cs.visibility!=='visible'||hiddenByOpacity(element)||cs.transform!=='none'||cs.filter!=='none'||cs.clipPath!=='none'||cs.perspective!=='none'||cs.animationName!=='none'||cs.writingMode!=='horizontal-tb'||cs.direction!=='ltr'||Number(cs.opacity)!==1||cs.backgroundImage!=='none'||cs.boxShadow!=='none'||cs.textShadow!=='none'||['hidden','clip','scroll','auto'].includes(cs.overflowX)||['hidden','clip','scroll','auto'].includes(cs.overflowY)||element!==table&&cs.position!=='static'&&!relativeCell)at('UNSUPPORTED_OBJECT','표 안의 숨김·변환·이미지 배경·효과는 아직 지원하지 않습니다.');
         if(element.tagName==='DIV'){
@@ -125,7 +156,11 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
         }
         if(['TD','TH'].includes(element.tagName)&&tableStyle.borderCollapse!=='collapse'&&sides.some(side=>parseFloat(cs[`border${side}Width`])>0)){at('UNSUPPORTED_OBJECT','셀 테두리가 있는 표는 border-collapse:collapse로 지정해 주세요.');return null;}
         if(!['TD','TH'].includes(element.tagName)&&sides.some(side=>parseFloat(cs[`border${side}Width`])>0)&&!(simpleRowRules&&element===ruledRows[0]))at('UNSUPPORTED_OBJECT','표 테두리는 각 셀에 지정해 주세요.');
-        if(['SPAN','B','I','STRONG','EM','U','SMALL'].includes(element.tagName)&&(visibleColor(cs.backgroundColor)||sides.some(side=>parseFloat(cs[`padding${side}`])>0||parseFloat(cs[`margin${side}`])!==0)||cs.display!=='inline'&&!simpleCellBlocks(element.parentElement)))at('UNSUPPORTED_OBJECT','셀 안의 별도 배경·여백·블록 배치는 아직 지원하지 않습니다.');
+        const highlightedRun=element.tagName==='SPAN'&&element.hasAttribute('data-pptx-highlight')&&/^rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)$/.test(cs.backgroundColor);
+        const validParagraph=paragraphBlock&&cs.display==='block'&&!visibleColor(cs.backgroundColor)&&sides.every(side=>parseFloat(cs[`margin${side}`])===0&&Number.isFinite(parseFloat(cs[`padding${side}`]))&&parseFloat(cs[`padding${side}`])>=0&&parseFloat(cs[`padding${side}`])<=20000)&&Number.isFinite(parseFloat(cs.textIndent))&&Math.abs(parseFloat(cs.textIndent))<=5000&&['left','right','center','justify','start','end'].includes(cs.textAlign);
+        const validMarker=paragraphMarker&&cs.display==='inline-block'&&!visibleColor(cs.backgroundColor)&&sides.every(side=>parseFloat(cs[`padding${side}`])===0&&parseFloat(cs[`margin${side}`])===0)&&Number.isFinite(parseFloat(cs.width))&&parseFloat(cs.width)>=0&&parseFloat(cs.width)<=5000&&parseFloat(cs.textIndent)===0;
+        const validPeriod=paragraphPeriod&&cs.display==='inline-block'&&parseFloat(cs.width)===0&&!visibleColor(cs.backgroundColor)&&sides.every(side=>parseFloat(cs[`padding${side}`])===0&&parseFloat(cs[`margin${side}`])===0);
+        if(['SPAN','B','I','STRONG','EM','U','SMALL'].includes(element.tagName)&&!validParagraph&&!validMarker&&!validPeriod&&(visibleColor(cs.backgroundColor)&&!highlightedRun||sides.some(side=>parseFloat(cs[`padding${side}`])>0||parseFloat(cs[`margin${side}`])!==0)||cs.display!=='inline'&&!simpleCellBlocks(element.parentElement)))at('UNSUPPORTED_OBJECT','셀 안의 별도 배경·여백·블록 배치는 아직 지원하지 않습니다.');
         if(['COL','COLGROUP'].includes(element.tagName)&&visibleColor(cs.backgroundColor))at('UNSUPPORTED_OBJECT','열 배경은 셀 배경으로 지정해 주세요.');
         for(const pseudo of ['::before','::after']){const ps=getComputedStyle(element,pseudo);if(['none','normal','""'].includes(ps.content))continue;let glyph='';try{glyph=JSON.parse(ps.content);}catch{}const arrow=['TD','TH'].includes(element.tagName)&&/^[→←↑↓❯❮]$/u.test(glyph)&&ps.position==='absolute'&&ps.display==='block'&&ps.transform==='none'&&ps.filter==='none'&&ps.clipPath==='none'&&ps.textShadow==='none'&&Number(ps.opacity)===1&&!visibleColor(ps.backgroundColor)&&ps.backgroundImage==='none'&&sides.every(side=>parseFloat(ps[`padding${side}`])===0&&parseFloat(ps[`border${side}Width`])===0);at('UNSUPPORTED_OBJECT',arrow?'표의 장식 화살표는 배경 그림에 보존합니다.':'표의 생성 콘텐츠를 명시적인 셀 문구로 넣어 주세요.');}
       }
@@ -159,7 +194,21 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
           const cs=getComputedStyle(cell),bounds=boxOf(cell);
           const end=rowBoxes[row+rowSpan-1];
           if(cs.display!=='table-cell'||Math.abs(bounds.y-rowBoxes[row].y)>.05||Math.abs(bounds.y+bounds.h-end.y-end.h)>.05){at('UNSUPPORTED_OBJECT','표의 셀 경계를 하나의 격자로 확정할 수 없습니다.');return null;}
-          const style=plainStyle(cs),runs=simpleCellBlocks(cell)?[...cell.children].flatMap((e,i)=>{const parts=textRuns(e);return i&&parts.length?[{text:'\n',style:parts[0].style},...parts]:parts;}):textRuns(cell),text=cell.innerText;
+          const style=plainStyle(cs),generatedParagraphs=generatedCellParagraphs(cell);
+          const paragraphs=generatedParagraphs?[...cell.children].map(e=>{
+            const parts=textRuns(e),placeholder=e.lastElementChild;let value=e.innerText;
+            if(placeholder?.tagName==='BR'&&placeholder.hasAttribute('data-pptx-empty')&&value.endsWith('\n'))value=value.slice(0,-1);
+            return {element:e,parts,text:value};
+          }):null;
+          const runs=paragraphs?paragraphs.flatMap(({element,parts},i)=>{const separator={text:'\n',style:parts[0]?.style??plainStyle(getComputedStyle(element))};return i?[separator,...parts]:parts;}):simpleCellBlocks(cell)?[...cell.children].flatMap((e,i)=>{const parts=textRuns(e);return i&&parts.length?[{text:'\n',style:parts[0].style},...parts]:parts;}):textRuns(cell);
+          const text=paragraphs?paragraphs.map(p=>p.text).join('\n'):cell.innerText;
+          if(generatedParagraphs&&!diagnostics.some(d=>d.code==='PARAGRAPH_SPACING_APPROXIMATED'&&d.slideId===id&&d.nodeId===table.dataset.sourceId))diagnostics.push({code:'PARAGRAPH_SPACING_APPROXIMATED',severity:'warning',slideId:id,nodeId:table.dataset.sourceId,sourceRef:{slideId:id,elementId:table.dataset.sourceId},message:'표 문단의 들여쓰기와 간격은 PPT로 다시 저장할 때 일부 달라질 수 있습니다.'});
+          for(const side of ['top','right','bottom','left']){
+            const encoded=cell.getAttribute(`data-pptx-inset-${side}`);if(encoded===null)continue;
+            const inset=Number(encoded),borderWidth=parseFloat(cs[`border${side[0].toUpperCase()+side.slice(1)}Width`]);
+            if(!Number.isFinite(inset)||inset<0||inset>borderWidth/2){at('INPUT_INVALID','표 셀의 테두리 보정 값이 잘못되었습니다.');continue;}
+            style.padding[side]+=inset;
+          }
           if(['normal','nowrap'].includes(cs.whiteSpace)&&[...cell.querySelectorAll('*')].every(e=>['normal','nowrap'].includes(getComputedStyle(e).whiteSpace))){
             for(let i=0;i<runs.length;i++)if(runs[i].text==='\n'){
               if(i>0)runs[i-1].text=runs[i-1].text.replace(/ +$/,'');
@@ -178,9 +227,19 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
           }
           style.borders={};for(const [name,side] of [['top','Top'],['right','Right'],['bottom','Bottom'],['left','Left']]){
             const borderSource=simpleRowRules&&cell.parentElement===ruledRows[0]&&['Top','Bottom'].includes(side)?getComputedStyle(ruledRows[0]):cs;
-            const width=parseFloat(borderSource[`border${side}Width`])||0,borderStyle=borderSource[`border${side}Style`];
+            let width=parseFloat(borderSource[`border${side}Width`])||0,color=borderSource[`border${side}Color`];const borderStyle=borderSource[`border${side}Style`];
             if(!['none','solid'].includes(borderStyle))at('UNSUPPORTED_OBJECT','셀 테두리는 단색 실선만 지원합니다.');
-            style.borders[name]={color:borderSource[`border${side}Color`],width,style:width?'solid':'none'};
+            const encoded=cell.getAttribute(`data-pptx-native-border-${name}`);
+            if(encoded!==null){
+              const match=/^(\d+(?:\.\d+)?) (#[a-f\d]{6})$/i.exec(encoded),original=Number(match?.[1]);
+              if(!match||!Number.isFinite(original)||original<.25||original>.5)at('INPUT_INVALID','표 원본 테두리 정보가 잘못되었습니다.');
+              else if(borderStyle==='solid'){
+                const authored=parseFloat(cell.style[`border${side}Width`]);if(Number.isFinite(authored)&&Math.abs(authored-original)<.00001)width=original;
+                const actual=/^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)$/.exec(color),expected=[1,3,5].map(i=>parseInt(match[2].slice(i,i+2),16));
+                if(actual&&expected.every((value,i)=>Number(actual[i+1])===value)&&Math.abs(Number(actual[4])-.5)<.00001)color=match[2].toLowerCase();
+              }
+            }
+            style.borders[name]={color,width,style:width?'solid':'none'};
           }
           for(const family of new Set([style.fontFamily,...runs.map(r=>r.style.fontFamily)]))if(!await fontAvailable(family))at('FONT_UNAVAILABLE',`표 글꼴을 사용할 수 없습니다: ${family}`);
           cells.push({row,col,rowSpan,colSpan,text,runs,style});
@@ -218,6 +277,12 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
       const sourceId=declared?el.dataset.sourceId:null;
       const nodeId=sourceId||el.id||`node-${index+1}`,sourceRef={slideId:id,...(sourceId?{elementId:sourceId}:{path:el.dataset.sourcePath??`node[${index}]`})};
       const at=(code,msg)=>issue(code,msg,id,nodeId,sourceRef);
+      if(el.hasAttribute('data-placeholder-marker'))diagnostics.push({code:'SOURCE_PLACEHOLDER_PRESENT',severity:'warning',slideId:id,nodeId,sourceRef,message:'이 HTML에는 원본에서 변환하지 못한 객체의 표시가 있습니다. 다시 만든 PPT에는 상세 설명이 포함되지 않으므로 원본과 비교해 보완해 주세요.'});
+      if(el.hasAttribute('data-duotone-baked'))diagnostics.push({code:'PPTX_IMAGE_DUOTONE_BAKED',severity:'warning',slideId:id,nodeId,sourceRef,message:'듀오톤 색상 효과를 그림에 적용했습니다. 효과를 별도 설정으로 편집할 수 없습니다.'});
+      if(el.hasAttribute('data-snip-background'))diagnostics.push({code:'PPTX_SHAPE_IMAGE_APPROXIMATED',severity:'warning',slideId:id,nodeId,sourceRef,message:'잘린 모서리 배경은 그림이며 글자는 별도로 편집할 수 있습니다.'});
+      if(el.hasAttribute('data-pptx-outer-shadow')&&st.boxShadow!=='none')diagnostics.push({code:'PPTX_SHADOW_OMITTED',severity:'warning',slideId:id,nodeId,sourceRef,message:'HTML의 바깥 그림자는 PPT로 다시 저장할 때 빠집니다.'});
+      if(el.hasAttribute('data-preset-vector'))diagnostics.push({code:'PPTX_SHAPE_IMAGE_APPROXIMATED',severity:'warning',slideId:id,nodeId,sourceRef,message:'HTML에서는 SVG 도형을 편집할 수 있지만, 다시 만든 PPT에서는 그림으로 저장되어 개별 편집할 수 없습니다.'});
+      if(el.dataset.kind==='text'&&el.querySelector('[data-pptx-paragraph]'))diagnostics.push({code:'PARAGRAPH_SPACING_APPROXIMATED',severity:'warning',slideId:id,nodeId,sourceRef,message:'HTML의 문단별 간격과 정렬은 PPT로 다시 저장할 때 일부 달라질 수 있습니다.'});
       if(['CANVAS','IFRAME','VIDEO','AUDIO','OBJECT','EMBED'].includes(el.tagName)){at('UNSUPPORTED_OBJECT',`${el.tagName} 객체는 지원하지 않습니다.`);continue;}
       if(profile!=='project-data-v1'&&((el!==root&&st.transform!=='none')||st.filter!=='none'||st.perspective!=='none'||st.clipPath!=='none'||st.animationName!=='none'))at('UNSUPPORTED_OBJECT','객체의 CSS 변환·필터·클리핑·애니메이션을 지원하지 않습니다.');
       if(Number(st.opacity)<1&&el.children.length)at('UNSUPPORTED_OBJECT','여러 자식을 합성하는 컨테이너의 투명도는 지원하지 않습니다.');
@@ -231,7 +296,7 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
         for(const prop of ['top','left','width','height','font-family','font-size','font-weight','font-style','font-stretch','line-height','letter-spacing','word-spacing','white-space','text-align','color'])probe.style.setProperty(prop,ps.getPropertyValue(prop),'important');
         el.append(probe);const rect=probe.getBoundingClientRect(),box={x:round((rect.x-rr.x)/renderScale),y:round((rect.y-rr.y)/renderScale),w:round(rect.width/renderScale),h:round(rect.height/renderScale)},baseline=directBaseline(glyph,ps,rect);probe.remove();
         if(box.w<=0||box.h<=0){at('UNSUPPORTED_OBJECT',`CSS ${pseudo}의 표시 위치를 확인할 수 없습니다.`);continue;}
-        const pseudoId=`${nodeId}::generated-${pseudo.slice(2)}`,fontStyle={fontFamily:familyName(ps.fontFamily),fontSize:parseFloat(ps.fontSize),fontWeight:Number(ps.fontWeight)||400,fontStyle:ps.fontStyle,color:ps.color,textDecoration:ps.textDecorationLine,letterSpacing:ps.letterSpacing};
+        const pseudoId=`${nodeId}::generated-${pseudo.slice(2)}`,fontStyle={fontFamily:familyName(ps.fontFamily),fontSize:parseFloat(ps.fontSize),fontWeight:Number(ps.fontWeight)||400,fontStyle:ps.fontStyle,...(ps.fontKerning==='none'?{disableKerning:true}:{}),color:ps.color,textDecoration:ps.textDecorationLine,letterSpacing:ps.letterSpacing};
         if(seen.has(pseudoId)){at('INPUT_INVALID','중복 객체 ID입니다.');continue;}seen.add(pseudoId);if(!await fontAvailable(fontStyle.fontFamily))at('FONT_UNAVAILABLE',`글꼴을 사용할 수 없습니다: ${fontStyle.fontFamily}`);
         const pseudoStyle={...fontStyle,align:'left',lineHeight:ps.lineHeight,whiteSpace:ps.whiteSpace,opacity:1,padding:{top:0,right:0,bottom:0,left:0},cssZIndex:0};
         const afterOrder=Math.max(domOrder.get(el),...[...el.querySelectorAll('*')].map(child=>domOrder.get(child)??0));orderKeys.set(pseudoId,afterOrder+.5);
@@ -243,7 +308,8 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
       let box=boxOf(el);
       if(editable){
         if(!['text','shape','line','image','group','table','chart'].includes(kind)||['table','chart'].includes(kind)&&profile!=='editable-slides-v2'){at('UNSUPPORTED_OBJECT','지원하지 않는 편집 객체입니다.');continue;}
-        if(!['text','table','chart'].includes(kind)&&(el.textContent.trim()||kind!=='line'&&el.children.length))at('UNSUPPORTED_OBJECT','이 객체 안에 추가된 콘텐츠를 편집 가능한 객체로 읽을 수 없습니다.');
+        const vectorSvg=kind==='image'&&el.tagName.toLowerCase()==='svg'&&el.hasAttribute('data-preset-vector');
+        if(!['text','table','chart'].includes(kind)&&(el.textContent.trim()||kind!=='line'&&!vectorSvg&&el.children.length))at('UNSUPPORTED_OBJECT','이 객체 안에 추가된 콘텐츠를 편집 가능한 객체로 읽을 수 없습니다.');
         if(kind==='text'&&[...el.querySelectorAll('*')].some(c=>!['SPAN','BR','B','I','STRONG','EM','U'].includes(c.tagName)))at('UNSUPPORTED_OBJECT','글자 객체 안의 비텍스트 콘텐츠는 지원하지 않습니다.');
         const fields={x:'left',y:'top',w:'width',h:'height'},authored={};
         // CSSOM stringifies numeric values to fewer significant digits. Read
@@ -253,7 +319,14 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
           const value=literals.get(prop)??el.style.getPropertyValue(prop);
           if(!/^-?(?:\d+\.?\d*|\.\d+)px$/.test(value)){at('INPUT_INVALID','편집 객체의 논리 좌표는 px 값이어야 합니다.');continue;}
           authored[key]=parseFloat(value);
-          if(Math.abs(authored[key]-box[key])>.05)at('UNSUPPORTED_OBJECT','현재 표시 배치와 객체의 논리 좌표가 다릅니다.');
+          if(Math.abs(authored[key]-box[key])>.05){
+            if(kind==='table'&&key==='h'&&box.h>authored.h){
+              // HTML tables can grow beyond their declared minimum height to
+              // fit text, just like PowerPoint tables. Export the visible grid.
+              authored.h=box.h;
+              diagnostics.push({code:'TABLE_HEIGHT_EXPANDED',severity:'warning',slideId:id,nodeId,sourceRef,message:'표가 셀 내용에 맞춰 늘어나 표시된 높이로 저장됩니다. 원본과 비교해 주세요.'});
+            }else at('UNSUPPORTED_OBJECT','현재 표시 배치와 객체의 논리 좌표가 다릅니다.');
+          }
         }
         if(st.position!=='absolute'||el.parentElement!==root)at('UNSUPPORTED_OBJECT','편집 객체는 장표에 직접 배치되어야 합니다.');
         box=authored;
@@ -290,7 +363,7 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
           range.setStart(child,first);range.setEnd(child,last);
           const rects=[...range.getClientRects()].filter(r=>r.width>0&&r.height>0),r=range.getBoundingClientRect();
           if(rects.length!==1||!r.width||!r.height){at('UNSUPPORTED_OBJECT','블록과 섞인 여러 줄 직접 글자는 지원하지 않습니다.');continue;}
-          const value=child.data.slice(first,last).replace(/[\t\r\n\f ]+/g,' '),fontStyle={fontFamily:familyName(st.fontFamily),fontSize:parseFloat(st.fontSize),fontWeight:Number(st.fontWeight)||400,fontStyle:st.fontStyle,color:st.color,textDecoration:st.textDecorationLine,letterSpacing:st.letterSpacing};
+          const value=child.data.slice(first,last).replace(/[\t\r\n\f ]+/g,' '),fontStyle={fontFamily:familyName(st.fontFamily),fontSize:parseFloat(st.fontSize),fontWeight:Number(st.fontWeight)||400,fontStyle:st.fontStyle,...(st.fontKerning==='none'?{disableKerning:true}:{}),color:st.color,textDecoration:st.textDecorationLine,letterSpacing:st.letterSpacing};
           if(parseFloat(st.webkitTextStrokeWidth)>0)fontStyle.outline={color:st.webkitTextStrokeColor,width:parseFloat(st.webkitTextStrokeWidth)};
           if(!await fontAvailable(fontStyle.fontFamily))at('FONT_UNAVAILABLE',`글꼴을 사용할 수 없습니다: ${fontStyle.fontFamily}`);
           const box={x:round((r.x-rr.x)/renderScale),y:round((r.y-rr.y)/renderScale),w:round(r.width/renderScale),h:round(r.height/renderScale)},id=`${nodeId}::direct-text-${part}`;
@@ -313,13 +386,20 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
       if(kind==='text'&&el.querySelector('svg'))at('UNSUPPORTED_OBJECT','HTML 글자와 SVG가 같은 줄에 섞인 콘텐츠는 별도 요소로 나누어 주세요.');
       if(seen.has(nodeId)){at('INPUT_INVALID','중복 객체 ID입니다.');continue;}seen.add(nodeId);
       const style=kind==='chart'?{fontFamily:familyName(st.fontFamily),fontSize:parseFloat(st.fontSize),fontWeight:400,fontStyle:'normal',color:'#223845',opacity:1}:plainStyle(st);
+      if(kind==='text'&&el.hasAttribute('data-pptx-shape-outline')){
+        const width=el.style.outlineWidth;
+        if(!/^\d+(?:\.\d+)?px$/.test(width)||st.outlineStyle!=='solid'||!Number.isFinite(parseFloat(width))||parseFloat(width)<=0||parseFloat(width)>1024)at('INPUT_INVALID','텍스트 도형의 외곽선이 잘못되었습니다.');
+        else Object.assign(style,{stroke:st.outlineColor,strokeWidth:parseFloat(width),borderStyle:'solid'});
+      }
       if(editable&&kind!=='chart'){
         style.valign=st.alignContent==='center'?'mid':st.alignContent==='end'?'bottom':'top';
         if(kind==='shape'){style.svgGeometry=el.dataset.geometry==='centerline';style.shape=st.borderTopLeftRadius==='50%'?'ellipse':'rect';}
         if(kind==='line'){
           const line=el.querySelector('svg > line');
           if(!line||el.querySelectorAll('svg > *').length!==1){at('UNSUPPORTED_OBJECT','편집 선은 SVG line 한 개여야 합니다.');continue;}
-          const ls=getComputedStyle(line);Object.assign(style,{svgGeometry:true,stroke:ls.stroke,strokeWidth:parseFloat(ls.strokeWidth),endpoints:{start:{x:box.x+line.x1.baseVal.value,y:box.y+line.y1.baseVal.value},end:{x:box.x+line.x2.baseVal.value,y:box.y+line.y2.baseVal.value}}});
+          const ls=getComputedStyle(line);let width=parseFloat(ls.strokeWidth);const nativeWidth=line.getAttribute('data-pptx-native-width');
+          if(nativeWidth!==null){const raw=Number(nativeWidth);if(!/^\d+(?:\.\d+)?$/.test(nativeWidth)||!Number.isFinite(raw)||raw<=0||raw>=1)at('INPUT_INVALID','원본 선 두께가 잘못되었습니다.');else if(Math.abs(width-1)<.001)width=raw;}
+          Object.assign(style,{svgGeometry:true,stroke:ls.stroke,strokeWidth:width,endpoints:{start:{x:box.x+line.x1.baseVal.value,y:box.y+line.y1.baseVal.value},end:{x:box.x+line.x2.baseVal.value,y:box.y+line.y2.baseVal.value}}});
           if(ls.strokeDasharray!=='none'||ls.markerStart!=='none'||ls.markerEnd!=='none')at('UNSUPPORTED_OBJECT','점선·화살표 선은 아직 지원하지 않습니다.');
         }
       }
@@ -343,6 +423,10 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
       }
       let content=kind==='text'?{text,runs,...(paragraphLines?{tableCellGroup:true}:{})}:kind==='image'?{assetId:el.dataset.assetId??null}:{};
       if(kind==='image'&&el.tagName==='IMG'){
+        if(el.hasAttribute('data-pptx-rounded-image')){
+          if(['TopLeft','TopRight','BottomRight','BottomLeft'].every(side=>st[`border${side}Radius`]==='50%'))content.rounding=true;
+          else at('UNSUPPORTED_OBJECT','사진의 둥근 마스크는 타원형만 PPT로 옮길 수 있습니다.');
+        }
         const view=st.getPropertyValue('object-view-box');
         if(view&&view!=='none'){
           const match=/^inset\(\s*((?:\d+(?:\.\d+)?%\s*){1,4})\)$/i.exec(view),values=match?.[1].trim().split(/\s+/).map(v=>Math.round(parseFloat(v)*1000));
@@ -381,7 +465,7 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
               for(const group of groups){
                 group.text=group.text.replace(/[\t\r\n\f ]+/g,' ');if(!group.text.trim())continue;
                 if(group.left<cellRect.left-1||group.right>cellRect.right+1||group.top<cellRect.top-1||group.bottom>cellRect.bottom+1){safe=false;break;}
-                const fontStyle={fontFamily:familyName(cs.fontFamily),fontSize:parseFloat(cs.fontSize),fontWeight:Number(cs.fontWeight)||400,fontStyle:cs.fontStyle,color:cs.color,textDecoration:cs.textDecorationLine,letterSpacing:cs.letterSpacing};
+                const fontStyle={fontFamily:familyName(cs.fontFamily),fontSize:parseFloat(cs.fontSize),fontWeight:Number(cs.fontWeight)||400,fontStyle:cs.fontStyle,...(cs.fontKerning==='none'?{disableKerning:true}:{}),color:cs.color,textDecoration:cs.textDecorationLine,letterSpacing:cs.letterSpacing};
                 if(parseFloat(cs.webkitTextStrokeWidth)>0){safe=false;break;}
                 if(!await fontAvailable(fontStyle.fontFamily)){safe=false;break;}
                 const rect={top:group.top},b={x:round((group.left-rr.x)/renderScale),y:round((group.top-rr.y)/renderScale),w:round((Math.min(cellRect.right,group.right+3*renderScale)-group.left)/renderScale),h:round((group.bottom-group.top)/renderScale)};
@@ -602,9 +686,11 @@ export async function measureInput(input,runtime) {
         if(svg.fonts.some(font=>!font.available))measurement.fontsReady=false;
       }
     }
-    result.diagnostics.push(...measured.diagnostics);result.measurements=measured.measurements;result.environment.fonts=measured.fonts??[];
+    result.diagnostics.push(...measured.diagnostics);result.measurements=measured.measurements;
     const mappings=identifyFontMappings(input);
-    const availableNative=await session.page.evaluate(async names=>{const available=[];for(const name of names){try{await new FontFace('__native_probe',`local("${name}")`).load();available.push(name);}catch{}}return available;},[...new Set(mappings.map(m=>m.nativeLocalName))]);
+    const selfLocalFamilies=[...new Set(input.fontFaces.filter(f=>f.selfLocal).map(f=>f.family))].filter(family=>input.fontFaces.filter(f=>f.family===family).every(f=>f.selfLocal));
+    const availableNative=await session.page.evaluate(async names=>{const available=[];for(const name of names){try{await new FontFace('__native_probe',`local(${JSON.stringify(name)})`).load();available.push(name);}catch{}}return available;},[...new Set([...mappings.map(m=>m.nativeLocalName),...selfLocalFamilies])]);
+    result.environment.fonts=(measured.fonts??[]).map(font=>selfLocalFamilies.includes(font.family)&&availableNative.includes(font.family)?{...font,custom:false}:font);
     result.environment.fontMappings=mappings.filter(m=>availableNative.includes(m.nativeLocalName));
     result.model={version:measured.slides.some(s=>s.nodes.some(n=>['table','chart'].includes(n.kind)))?2:1,sourceDigest:input.source.sha256,slides:measured.slides,assets:[...input.assets]};
     if(['editable-slides-v1','editable-slides-v2'].includes(input.profile))result.model.pptxSizeEmu=input.pptxSizeEmu;
@@ -650,7 +736,10 @@ export async function measureInput(input,runtime) {
         await session.page.setViewportSize(m.referenceSize);
         const root=session.page.locator(selector).nth(index);
         const oldStyle=await root.evaluate(el=>{const old=el.getAttribute('style');el.style.setProperty('position','fixed','important');el.style.setProperty('left','0','important');el.style.setProperty('top','0','important');el.style.setProperty('margin','0','important');return old;});
-        let bytes;try{bytes=await root.screenshot({animations:'disabled',scale:'css'});}finally{await root.evaluate((el,old)=>{if(old===null)el.removeAttribute('style');else el.setAttribute('style',old);},oldStyle);}
+        // Element screenshots round fractional transformed bounds outward. Clip
+        // the fixed slide at the declared integer reference size instead so the
+        // PNG dimensions match the coordinate system used for measurements.
+        let bytes;try{bytes=await session.page.screenshot({clip:{x:0,y:0,...m.referenceSize},animations:'disabled',scale:'css'});}finally{await root.evaluate((el,old)=>{if(old===null)el.removeAttribute('style');else el.setAttribute('style',old);},oldStyle);}
         if(bytes.readUInt32BE(16)!==m.referenceSize.width||bytes.readUInt32BE(20)!==m.referenceSize.height){result.diagnostics.push(diagnostic('RENDER_INCOMPLETE','캡처 크기가 선언한 기준 화면 크기와 다릅니다.',{slideId:m.slideId}));continue;}
         result.previews.push({slideId:m.slideId,bytes:new Uint8Array(bytes),...m.referenceSize});
       }

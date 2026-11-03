@@ -1,9 +1,12 @@
+import {pptCharacterSpacing} from './text-spacing.mjs';
+
 // PptxGenJS owns the native table XML; measured cell sizes remain explicit.
 export function addNativeTable(slide,node,{pointScale,resolveFont,paint}){
   const {content:c,boxCssPx:b}=node,inch=v=>v*pointScale/72;
   const textStyle=s=>{
-    const color=paint(s.color),options={...resolveFont(s),fontSize:s.fontSize*pointScale,italic:s.fontStyle==='italic',color:color.color,transparency:color.transparency,charSpacing:s.letterSpacing&&s.letterSpacing!=='normal'?parseFloat(s.letterSpacing)*pointScale:0,underline:s.textDecoration?.includes('underline')?{style:'sng'}:undefined,breakLine:false};
+    const color=paint(s.color),options={...resolveFont(s),fontSize:s.fontSize*pointScale,italic:s.fontStyle==='italic',color:color.color,transparency:color.transparency,charSpacing:pptCharacterSpacing(s,pointScale),underline:s.textDecoration?.includes('underline')?{style:'sng'}:undefined,...(Number.isInteger(s.baseline)&&s.baseline!==0&&Math.abs(s.baseline)<=100000?{baseline:s.baseline/50}:{}),breakLine:false};
     if(s.outline){const edge=paint(s.outline.color);if(edge.transparency!==0||!Number.isFinite(s.outline.width)||s.outline.width<=0)throw new Error('불투명 단색 외의 표 글자 외곽선은 지원하지 않습니다.');options.outline={color:edge.color,size:s.outline.width*pointScale};}
+    if(s.highlight){const highlight=paint(s.highlight);if(highlight.transparency!==0)throw new Error('불투명 단색 외의 표 글자 형광펜은 지원하지 않습니다.');options.highlight=highlight.color;}
     return options;
   };
   const rows=Array.from({length:c.rows},()=>[]);

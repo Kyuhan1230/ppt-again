@@ -10,9 +10,9 @@ const flags=x=>x.replace(/<a:rPr([^>]*)>/,(_,attrs)=>'<a:rPr'+attrs.replace(/\s+
 for(const [name,mutate] of [
  ['empty effect list',x=>x.replace(/<a:rPr([^>]*)>/,'<a:rPr$1><a:effectLst/>')],
  ['empty effect list and default flags',x=>flags(x).replace(/<a:rPr([^>]*)>/,'<a:rPr$1><a:effectLst/>')],
- ['empty tab list',x=>x.replace(/<a:pPr([^>]*)>/,'<a:pPr$1><a:tabLst/>')]
+ ['empty tab list',x=>x.replace(/<a:pPr([^>]*)>/,'<a:pPr$1><a:tabLst/>')],
+ ['unused tab stops',x=>x.replace(/<a:pPr([^>]*)>/,'<a:pPr$1><a:tabLst><a:tab pos="914400" algn="l"/></a:tabLst>')]
 ])test(`${name} preserves text in strict and partial imports`,async()=>{const b=await fixture(mutate);for(const allowPartial of [false,true]){const r=await readPptx(b,{allowPartial});assert.equal(r.status,'parsed',JSON.stringify(r.diagnostics));assert.equal(r.model.slides[0].nodes.length,1);assert.equal(r.model.slides[0].nodes[0].content.text,text);assert.ok(!r.diagnostics.some(d=>d.code==='PPTX_OBJECT_PLACEHOLDER'||d.reasonKey==='PPTX_TEXT_STYLE_UNSUPPORTED'));assert.match(exportHtml(r.model).html,/Synthetic plain text/);}});
 for(const [name,mutate] of [
- ['nonempty shadow effect',x=>x.replace(/<a:rPr([^>]*)>/,'<a:rPr$1><a:effectLst><a:outerShdw blurRad="0" dist="12700" dir="0"><a:srgbClr val="000000"/></a:outerShdw></a:effectLst>')],
- ['nonempty tab list',x=>x.replace(/<a:pPr([^>]*)>/,'<a:pPr$1><a:tabLst><a:tab pos="914400" algn="l"/></a:tabLst>')]
+ ['nonempty shadow effect',x=>x.replace(/<a:rPr([^>]*)>/,'<a:rPr$1><a:effectLst><a:outerShdw blurRad="0" dist="12700" dir="0"><a:srgbClr val="000000"/></a:outerShdw></a:effectLst>')]
 ])test(`${name} remains unsupported rather than silently removed`,async()=>{const b=await fixture(mutate);const strict=await readPptx(b);assert.equal(strict.status,'failed');assert.ok(strict.diagnostics.some(d=>d.reasonKey==='PPTX_TEXT_STYLE_UNSUPPORTED'&&d.severity==='error'));const partial=await readPptx(b,{allowPartial:true});assert.equal(partial.status,'parsed');assert.ok(partial.diagnostics.some(d=>d.code==='PPTX_OBJECT_PLACEHOLDER'));assert.match(exportHtml(partial.model).html,/변환하지 못한 객체/);});

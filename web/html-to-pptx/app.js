@@ -49,9 +49,10 @@ function resultMessages(job){
   const visible=job.slides.some(s=>s.previewUrl),pptx=job.sourceType==='pptx',failed=job.status==='failed';
   const inputStopped=pptx&&failed&&!job.slides.length&&!job.exportAvailable&&!job.partialExportAvailable;
   const htmlAvailable=pptx&&job.exportAvailable;
+  const replaced=htmlAvailable&&(job.diagnostics??[]).some(d=>d.code==='PPTX_OBJECT_PLACEHOLDER');
   return {
-    status:inputStopped?'입력 분석 중단: HTML과 미리보기 생성 안 됨. 아래 진단에서 원인을 확인하세요.':htmlAvailable&&!visible?'HTML 변환은 가능합니다. 미리보기 렌더링만 실패했습니다.':failed?(pptx?'변환을 막는 항목이 있습니다. 아래 진단에서 해당 장표와 원인을 확인하세요.':'아래 항목을 수정하거나 장표 영역을 지정한 뒤 다시 분석하세요.'):`${job.fileName}에서 장표 ${job.slideCount}장을 확인했습니다.`,
-    empty:inputStopped?'입력 분석 중단: HTML과 미리보기 생성 안 됨. 원본 PowerPoint 이미지는 제공되지 않습니다.':htmlAvailable?'미리보기 렌더링에 실패했지만 HTML은 다운로드할 수 있습니다. 다운로드 후 배치를 확인하세요.':job.partialExportAvailable?'일부 장표는 다운로드할 수 있지만 미리보기는 없습니다. 아래 진단과 제외 장표를 확인하세요.':'미리보기를 만들지 못했습니다. 아래 원인별 진단을 확인하세요. 원본 PowerPoint 이미지는 제공되지 않습니다.'
+    status:inputStopped?'입력 분석 중단: HTML과 미리보기 생성 안 됨. 아래 진단에서 원인을 확인하세요.':replaced?`HTML을 다운로드할 수 있지만 일부 객체가 경고 표시로 대체됩니다.${visible?' 미리보기와 진단을 확인하세요.':' 미리보기 렌더링도 실패했습니다. 아래 진단을 확인하세요.'}`:htmlAvailable&&!visible?'HTML 변환은 가능합니다. 미리보기 렌더링만 실패했습니다.':failed?(pptx?'변환을 막는 항목이 있습니다. 아래 진단에서 해당 장표와 원인을 확인하세요.':'아래 항목을 수정하거나 장표 영역을 지정한 뒤 다시 분석하세요.'):`${job.fileName}에서 장표 ${job.slideCount}장을 확인했습니다.`,
+    empty:inputStopped?'입력 분석 중단: HTML과 미리보기 생성 안 됨. 원본 PowerPoint 이미지는 제공되지 않습니다.':replaced?'미리보기 렌더링에 실패했습니다. 다운로드할 HTML의 일부 객체도 경고 표시로 대체됩니다. 아래 진단을 확인하세요.':htmlAvailable?'미리보기 렌더링에 실패했지만 HTML은 다운로드할 수 있습니다. 다운로드 후 배치를 확인하세요.':job.partialExportAvailable?'일부 장표는 다운로드할 수 있지만 미리보기는 없습니다. 아래 진단과 제외 장표를 확인하세요.':'미리보기를 만들지 못했습니다. 아래 원인별 진단을 확인하세요. 원본 PowerPoint 이미지는 제공되지 않습니다.'
   };
 }
 function showResult(job){
