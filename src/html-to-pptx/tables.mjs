@@ -25,6 +25,25 @@ export function validateTable(content){
     check(typeof cell.text==='string',`${p}.text`,'Expected current cell text');
     const runs=cell.runs;check(Array.isArray(runs)&&runs.every(run=>record(run)&&typeof run.text==='string'&&record(run.style)),`${p}.runs`,'Expected text runs');
     if(Array.isArray(runs))check(runs.map(run=>run?.text??'').join('')===cell.text,`${p}.runs`,'Text runs do not match current cell text');
+    if(cell.paragraphs!==undefined){
+      const paragraphs=cell.paragraphs;
+      check(Array.isArray(paragraphs)&&paragraphs.length>0&&paragraphs.length<=10000,`${p}.paragraphs`,'Expected text paragraphs');
+      if(Array.isArray(paragraphs)){
+        for(const [index,para] of paragraphs.entries()){
+          const pp=`${p}.paragraphs[${index}]`;
+          if(!record(para)){check(false,pp,'Expected paragraph');continue;}
+          for(const key of ['beforePx','afterPx'])check(Number.isFinite(para[key])&&para[key]>=0&&para[key]<=20000,`${pp}.${key}`,'Invalid paragraph spacing');
+          for(const key of ['leftPx','rightPx'])check(Number.isFinite(para[key])&&para[key]>=0&&para[key]<=5000,`${pp}.${key}`,'Invalid paragraph margin');
+          check(Number.isFinite(para.indentPx)&&Math.abs(para.indentPx)<=5000,`${pp}.indentPx`,'Invalid paragraph indent');
+          check(typeof para.lineHeight==='string'&&/^\d+(?:\.\d+)?(?:px)?$/.test(para.lineHeight)&&Number.parseFloat(para.lineHeight)>0&&Number.parseFloat(para.lineHeight)<=20000,`${pp}.lineHeight`,'Invalid paragraph line height');
+          check(['left','center','right','justify'].includes(para.align),`${pp}.align`,'Invalid paragraph alignment');
+          if(para.hangingPunct!==undefined)check(typeof para.hangingPunct==='boolean',`${pp}.hangingPunct`,'Invalid hanging punctuation');
+          check(Array.isArray(para.runs)&&para.runs.length>0&&para.runs.every(r=>record(r)&&typeof r.text==='string'&&record(r.style)),`${pp}.runs`,'Invalid paragraph text');
+          if(Array.isArray(para.runs))check(para.runs.every((r,i)=>r?.marker===undefined||r.marker===true&&i===0),`${pp}.runs`,'Invalid list marker');
+        }
+        if(paragraphs.every(para=>record(para)&&Array.isArray(para.runs)))check(paragraphs.map(para=>para.runs.map(r=>r?.text??'').join('')).join('\n')===cell.text,`${p}.paragraphs`,'Paragraphs do not match text');
+      }
+    }
     const style=cell.style;if(!record(style)){check(false,`${p}.style`,'Expected cell style');continue;}
     check(typeof style.fontFamily==='string'&&style.fontFamily.trim()&&positive(style.fontSize),`${p}.style`,'Expected cell font and size');
     check(['left','center','right','justify'].includes(style.align)&&['top','mid','bottom'].includes(style.valign),`${p}.style`,'Unsupported cell alignment');

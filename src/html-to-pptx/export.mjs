@@ -7,6 +7,7 @@ import {addNativeTable} from './write-table.mjs';
 import {addNativeChart} from './write-chart.mjs';
 import {chartText} from './charts.mjs';
 import {planFontEmbedding,embedPptxFonts} from './font-embedding.mjs';
+import {pptCharacterSpacing} from './text-spacing.mjs';
 
 function paint(value,opacity=1){
   if(!value||value==='transparent')return {color:'FFFFFF',transparency:100};
@@ -169,7 +170,7 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
         const b=node.boxCssPx,st=node.style,box={x:inches(b.x),y:inches(b.y),w:inches(b.w),h:inches(b.h),objectName:node.id};
         if(node.kind==='shape'&&st.assetId)addBackground(st.assetId,box,node.id,node.sourceRef,st.opacity??1);
         if(node.kind==='text'){
-          const runOptions=s=>({...resolveTextFont(s,source),fontSize:s.fontSize*pointScale,italic:s.fontStyle==='italic',color:paint(s.color,st.opacity).color,transparency:paint(s.color,st.opacity).transparency,charSpacing:s.letterSpacing&&s.letterSpacing!=='normal'?parseFloat(s.letterSpacing)*pointScale:0,underline:s.textDecoration?.includes('underline')?{style:'sng'}:undefined,breakLine:false});
+          const runOptions=s=>({...resolveTextFont(s,source),fontSize:s.fontSize*pointScale,italic:s.fontStyle==='italic',color:paint(s.color,st.opacity).color,transparency:paint(s.color,st.opacity).transparency,charSpacing:pptCharacterSpacing(s,pointScale),underline:s.textDecoration?.includes('underline')?{style:'sng'}:undefined,...(Number.isInteger(s.baseline)&&s.baseline!==0&&Math.abs(s.baseline)<=100000?{baseline:s.baseline/50}:{}),breakLine:false});
           let runs=(node.content.runs??[{text:node.content.text,style:st}]).map(r=>{
             const options=runOptions(r.style),outline=r.style.outline;
             if(outline){
@@ -177,6 +178,7 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
               if(color.transparency!==0||!Number.isFinite(outline.width)||outline.width<=0)throw new Error('불투명 단색 외의 글자 외곽선은 지원하지 않습니다.');
               options.outline={color:color.color,size:outline.width*pointScale};
             }
+            if(r.style.highlight){const highlight=paint(r.style.highlight);if(highlight.transparency!==0)throw new Error('불투명 단색 외의 글자 형광펜은 지원하지 않습니다.');options.highlight=highlight.color;}
             return {text:r.text,options};
           });
           if(node.content.tableCellGroup){
@@ -211,7 +213,7 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
           const crop=node.content.crop;
           const fullWidth=crop?box.w/(1-(crop.left+crop.right)/100000):box.w,fullHeight=crop?box.h/(1-(crop.top+crop.bottom)/100000):box.h;
           const sizing=crop?{type:'crop',x:fullWidth*crop.left/100000,y:fullHeight*crop.top/100000,w:box.w,h:box.h}:undefined;
-          slide.addImage({...box,w:fullWidth,h:fullHeight,sizing,data:assetDataUrl(asset),transparency:(1-(st.opacity??1))*100});
+          slide.addImage({...box,w:fullWidth,h:fullHeight,sizing,data:assetDataUrl(asset),rounding:node.content.rounding===true,transparency:(1-(st.opacity??1))*100});
           if(asset.mime==='image/svg+xml'&&!node.content.artworkOnly)diagnostics.push(diagnostic('UNSUPPORTED_OBJECT','SVG는 그림 객체입니다. 내부 글자와 경로를 개별 편집할 수 없습니다.',{slideId:source.id,nodeId:node.id,sourceRef:node.sourceRef},'warning'));
         }
         objectMap.push({sourceSlideId:source.id,sourceNodeId:node.id,sourceRef:node.sourceRef,pptSlideNumber:index+1,pptObjectId:objectId++,pptObjectName:node.id,support:node.kind==='text'?'native-text':node.kind==='image'?(node.content.artworkOnly?'background-art':'picture'):'native-shape',parentId:node.parentId});

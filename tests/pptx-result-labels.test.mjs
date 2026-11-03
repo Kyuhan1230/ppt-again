@@ -21,6 +21,15 @@ test('available HTML without preview is described as a rendering failure, not in
  const result=messages({...job,status:'analyzed',slides:[{previewUrl:null}],slideCount:1,exportAvailable:true});
  assert.match(result.status,/미리보기 렌더링만 실패/);assert.match(result.empty,/HTML은 다운로드할 수/);assert.doesNotMatch(result.status,/입력 분석 중단/);
 });
+test('partial PPTX export reports replaced objects even when the preview is unavailable',()=>{
+ const result=messages({...job,status:'analyzed',slides:[{previewUrl:null}],slideCount:1,exportAvailable:true,diagnostics:[{code:'PPTX_OBJECT_PLACEHOLDER',severity:'warning'}]});
+ assert.match(result.status,/일부 객체/);assert.match(result.status,/미리보기/);assert.doesNotMatch(result.status,/렌더링만 실패/);
+ assert.match(result.empty,/일부 객체/);
+});
+test('partial PPTX export reports replaced objects even when the preview is available',()=>{
+ const result=messages({...job,status:'analyzed',slides:[{previewUrl:'actual.png'}],slideCount:1,exportAvailable:true,diagnostics:[{code:'PPTX_OBJECT_PLACEHOLDER',severity:'warning'}]});
+ assert.match(result.status,/일부 객체/);assert.doesNotMatch(result.status,/렌더링만 실패/);
+});
 test('existing model with blocked conversion is not mislabeled as failed input parsing',()=>{
  const result=messages({...job,slides:[{previewUrl:null}],slideCount:1});
  assert.match(result.status,/변환을 막는 항목/);assert.doesNotMatch(result.status,/입력 분석 중단/);

@@ -69,12 +69,14 @@ test('unsupported rounded rectangle adjustment formulas cannot silently change t
   const result=await readPptx(zipSync(parts));assert.equal(result.status,'failed');assert.ok(result.diagnostics.some(d=>d.severity==='error'));
 });
 
-test('paragraph spacing is reported as an approximation while current text remains editable',async()=>{
+test('paragraph spacing is visible in HTML and re-export reports its PPT limitation',async()=>{
   const parts=await fixture();
   update(parts,'ppt/slides/slide1.xml',xml=>xml.replace(/<a:pPr([^>]*)>/,'<a:pPr$1><a:spcAft><a:spcPts val="500"/></a:spcAft>'));
   const result=await readPptx(zipSync(parts));assert.equal(result.status,'parsed',JSON.stringify(result.diagnostics));
-  assert.ok(result.diagnostics.some(d=>d.severity==='warning'&&d.code==='PARAGRAPH_SPACING_APPROXIMATED'));
-  const html=exportHtml(result.model).html;assert.match(html,/First paragraph/);assert.match(html,/Second paragraph/);
+  const node=result.model.slides[0].nodes.find(n=>n.id==='report');assert.ok(Math.abs(node.content.paragraphs[0].afterPx-20/3)<1e-8);
+  const html=exportHtml(result.model).html;assert.match(html,/First paragraph/);assert.match(html,/Second paragraph/);assert.match(html,/data-pptx-paragraph/);
+  const measured=await measureInput(await readInput({html}),runtime);assert.ok(measured.diagnostics.some(d=>d.code==='PARAGRAPH_SPACING_APPROXIMATED'));
+  assert.equal(measured.model.slides[0].nodes.find(n=>n.id==='report').content.text,'First paragraph\nSecond paragraph');
 });
 
 test('a missing local font warns during PPTX import without blocking the editable HTML',async()=>{
