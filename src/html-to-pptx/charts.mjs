@@ -1,6 +1,11 @@
 const record=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const label=value=>typeof value==='string'&&value.length<=100000&&value.isWellFormed()&&!/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/.test(value);
 const format=value=>{const rounded=Number(value.toPrecision(10));return String(Number.isFinite(rounded)?rounded:value);};
+// PowerPoint's General chart labels use a compact numeric display rather than
+// rendering all floating-point digits from calculated tick values.
+const axisFormat=value=>{const rounded=Number(value.toPrecision(value<0?7:8));return String(Number.isFinite(rounded)?rounded:value);};
+const axisLabelWidth=(value,fontSize)=>[...axisFormat(value)].reduce((width,c)=>width+(/[0-9]/.test(c)?.55:/[.,]/.test(c)?.25:.45)*fontSize,0);
+const legendLabelWidth=(value,fontSize)=>[...value].reduce((width,c)=>width+(/[\p{Script=Han}\p{Script=Hangul}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(c)?1:/\s/u.test(c)?.28:/[ilI]/.test(c)?.28:/[A-Z]/.test(c)?.6:/[a-z]/.test(c)?.48:/\d/.test(c)?.55:.35)*fontSize,0);
 const escape=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const number=value=>{if(!Number.isFinite(value))throw Object.assign(new Error('Invalid chart geometry'),{code:'INPUT_INVALID'});return String(Number(value.toFixed(6)));};
 
@@ -8,8 +13,9 @@ export function validateChart(content){
   const errors=[],check=(ok,path,message)=>{if(!ok)errors.push({path,message});};
   const keys=(value,allowed,path)=>check(Object.keys(value).every(key=>allowed.includes(key)),path,'Unsupported chart option');
   if(!record(content))return {valid:false,errors:[{path:'',message:'Expected chart content'}]};
-  keys(content,['type','categories','series','title','legend','axes'],'');
+  keys(content,['type','categories','series','title','legend','axes','gapWidth'],'');
   check(['bar','line','pie'].includes(content.type),'type','Expected bar, line or pie');
+  if('gapWidth' in content)check(content.type==='bar'&&Number.isInteger(content.gapWidth)&&content.gapWidth>=0&&content.gapWidth<=500,'gapWidth','Expected a bar gap between 0 and 500 percent');
   check(label(content.title),'title','Expected chart title');check(typeof content.legend==='boolean','legend','Expected legend visibility');
   const categories=content.categories,series=content.series;
   check(Array.isArray(categories)&&categories.length>0&&categories.length<=1000&&categories.every(c=>label(c)&&c.trim()),'categories','Expected 1 to 1000 category labels');
@@ -60,14 +66,22 @@ export function chartAxis(content){
 // Font collection consumes this text with the chart node's resolved font.
 // Data labels are included so enabling the native legend cannot lose glyphs.
 export function chartText(content){
-  return [content.title,...content.categories,...content.series.flatMap(s=>[s.name,...s.values.map(format)]),content.axes.xTitle??'',content.axes.yTitle??'',...(chartAxis(content)?.ticks.map(format)??[])].filter(Boolean);
+  return [content.title,...content.categories,...content.series.flatMap(s=>[s.name,...s.values.map(format)]),content.axes.xTitle??'',content.axes.yTitle??'',...(chartAxis(content)?.ticks.map(axisFormat)??[])].filter(Boolean);
 }
 
 export function renderChartSvg(content,{width,height,fontFamily='Arial',fontSize=12}={}){
   if(!validateChart(content).valid||![width,height,fontSize].every(v=>Number.isFinite(v)&&v>0)||!label(fontFamily))throw Object.assign(new Error('Invalid chart or display size'),{code:'INPUT_INVALID'});
-  const unit=fontSize/12,left=Math.min(70*unit,width*.15),right=width-Math.min(20*unit,width*.05),top=Math.min((content.title?50:25)*unit,height*.2),bottom=height-Math.min((content.legend?75:50)*unit,height*.25),w=right-left,h=bottom-top;
+  const unit=fontSize/12,axis=chartAxis(content),tickWidth=axis?Math.max(0,...axis.ticks.map(tick=>axisLabelWidth(tick,fontSize))):0;
+  const tallCategory=content.categories.some(category=>/[\p{Script=Han}\p{Script=Hangul}\p{Script=Hiragana}\p{Script=Katakana}\uFF01-\uFF60]/u.test(category));
+  // PowerPoint reserves room for actual value labels, axis titles, and the
+  // title/legend. Keep bounds positive for small charts and long labels.
+  const left=axis?Math.min(width*.4,tickWidth+fontSize+9+(content.axes.yTitle?2.65*fontSize:0)):Math.min(70*unit,width*.15);
+  const right=width-Math.min(axis?15:20*unit,width*.05);
+  const top=axis?Math.min(fontSize*2/3+6.31+(content.title?2.65*fontSize:0),height*.3):Math.min((content.title?50:25)*unit,height*.2);
+  const bottom=axis?height-Math.min(2.058*fontSize+(tallCategory?14:9)+(content.legend?2.55*fontSize:0)+(content.axes.xTitle?2.65*fontSize:0),height*.45):height-Math.min((content.legend?75:50)*unit,height*.25);
+  const w=right-left,h=bottom-top;
   const parts=[],text=(x,y,value,extra='')=>`<text x="${number(x)}" y="${number(y)}"${extra}>${escape(value)}</text>`;
-  if(content.title)parts.push(text(width/2,Math.min(22*unit,height*.09),content.title,' text-anchor="middle"'));
+  if(content.title)parts.push(text(width/2,axis?Math.min(24*unit,height*.25):Math.min(22*unit,height*.09),content.title,' text-anchor="middle"'));
   if(content.type==='pie'){
     const values=content.series[0].values,largest=Math.max(...values),weights=values.map(v=>v/largest),total=weights.reduce((a,b)=>a+b,0),cx=(left+right)/2,cy=(top+bottom)/2,r=Math.min(w,h)*.46;
     let angle=-Math.PI/2;
@@ -79,26 +93,28 @@ export function renderChartSvg(content,{width,height,fontFamily='Arial',fontSize
       angle=end;
     });
   }else{
-    const axis=chartAxis(content),scale=Math.max(Math.abs(axis.min),Math.abs(axis.max),Number.MIN_VALUE),y=value=>bottom-(value/scale-axis.min/scale)/(axis.max/scale-axis.min/scale)*h;
-    for(const tick of axis.ticks){const ty=y(tick);parts.push(`<line x1="${number(left)}" y1="${number(ty)}" x2="${number(right)}" y2="${number(ty)}" stroke="#cbd5e1" stroke-width="${number(unit)}"/>`,text(left-8*unit,ty+4*unit,format(tick),' text-anchor="end"'));}
-    parts.push(`<path d="M${number(left)} ${number(top)} V${number(bottom)} H${number(right)}" fill="none" stroke="#475569" stroke-width="${number(unit)}"/>`);
+    const scale=Math.max(Math.abs(axis.min),Math.abs(axis.max),Number.MIN_VALUE),y=value=>bottom-(value/scale-axis.min/scale)/(axis.max/scale-axis.min/scale)*h;
+    for(const tick of axis.ticks){const ty=y(tick);parts.push(`<line x1="${number(left)}" y1="${number(ty)}" x2="${number(right)}" y2="${number(ty)}" stroke="#cbd5e1" stroke-width="${number(unit)}"/>`,text(left-12*unit,ty+4*unit,axisFormat(tick),' text-anchor="end"'));}
     const step=w/content.categories.length,x=i=>left+step*(i+.5),baseline=y(Math.max(axis.min,Math.min(axis.max,0)));
-    content.categories.forEach((category,i)=>parts.push(text(x(i),bottom+18*unit,category,' text-anchor="middle"')));
+    parts.push(`<path d="M${number(left)} ${number(top)} V${number(bottom)} M${number(left)} ${number(baseline)} H${number(right)}" fill="none" stroke="#475569" stroke-width="${number(unit)}"/>`);
+    content.categories.forEach((category,i)=>parts.push(text(x(i),bottom+24*unit,category,' text-anchor="middle"')));
     content.series.forEach((series,s)=>{
       if(content.type==='bar'){
-        const bar=step*.75/content.series.length;
-        series.values.forEach((value,i)=>parts.push(`<rect data-series-index="${s}" data-point-index="${i}" x="${number(left+step*i+step*.125+s*bar)}" y="${number(Math.min(baseline,y(value)))}" width="${number(bar)}" height="${number(Math.abs(baseline-y(value)))}" fill="${series.color}"/>`));
+        const bar=step/(content.series.length+(content.gapWidth??33)/100),padding=(step-bar*content.series.length)/2;
+        series.values.forEach((value,i)=>parts.push(`<rect data-series-index="${s}" data-point-index="${i}" x="${number(left+step*i+padding+s*bar)}" y="${number(Math.min(baseline,y(value)))}" width="${number(bar)}" height="${number(Math.abs(baseline-y(value)))}" fill="${series.color}" shape-rendering="crispEdges"/>`));
       }else{
         parts.push(`<path d="${series.values.map((value,i)=>`${i?'L':'M'}${number(x(i))} ${number(y(value))}`).join(' ')}" fill="none" stroke="${series.color}" stroke-width="${number(2*unit)}"/>`);
         series.values.forEach((value,i)=>parts.push(`<circle data-series-index="${s}" data-point-index="${i}" cx="${number(x(i))}" cy="${number(y(value))}" r="${number(3*unit)}" fill="${series.color}"/>`));
       }
     });
-    if(content.axes.xTitle)parts.push(text((left+right)/2,bottom+38*unit,content.axes.xTitle,' text-anchor="middle"'));
-    if(content.axes.yTitle)parts.push(text(16*unit,(top+bottom)/2,content.axes.yTitle,` text-anchor="middle" transform="rotate(-90 ${number(16*unit)} ${number((top+bottom)/2)})"`));
+    if(content.axes.xTitle)parts.push(text((left+right)/2,bottom+44*unit,content.axes.xTitle,' text-anchor="middle"'));
+    if(content.axes.yTitle)parts.push(text(28*unit,(top+bottom)/2,content.axes.yTitle,` text-anchor="middle" transform="rotate(-90 ${number(28*unit)} ${number((top+bottom)/2)})"`));
   }
   if(content.legend){
     const items=content.type==='pie'?content.categories.map(name=>({name,color:content.series[0].color})):content.series;
-    items.forEach((item,i)=>{const x=left+w*i/items.length,y=height-12*unit;parts.push(`<rect x="${number(x)}" y="${number(y-9*unit)}" width="${number(8*unit)}" height="${number(8*unit)}" fill="${item.color}"/>`,text(x+12*unit,y,item.name));});
+    const widths=items.map(item=>12*unit+legendLabelWidth(item.name,fontSize)),gap=14*unit,total=widths.reduce((sum,value)=>sum+value,0)+gap*(items.length-1);
+    let cursor=axis?Math.max(0,(width-total)/2+2*unit):left;
+    items.forEach((item,i)=>{const x=axis?cursor:left+w*i/items.length,y=height-(axis?14:12)*unit;parts.push(`<rect x="${number(x)}" y="${number(y-9*unit)}" width="${number(8*unit)}" height="${number(8*unit)}" fill="${item.color}"/>`,text(x+12*unit,y,item.name));cursor+=widths[i]+gap;});
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${number(width)}" height="${number(height)}" viewBox="0 0 ${number(width)} ${number(height)}" role="img" aria-label="${escape(content.title)}" font-family="${escape(fontFamily)}" font-size="${number(fontSize)}" font-weight="normal" font-style="normal" fill="#223845">${parts.join('')}</svg>`;
 }

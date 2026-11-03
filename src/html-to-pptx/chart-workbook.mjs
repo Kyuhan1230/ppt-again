@@ -21,7 +21,8 @@ export function readChartWorkbook(bytes,{budget}={}){
       check(parts[file],'필수 차트 워크북 부분이 없습니다.');
       let text;try{text=new TextDecoder('utf-8',{fatal:true}).decode(parts[file]);}catch{reject('워크북 XML 문자 인코딩이 올바르지 않습니다.');}
       check(!/<!DOCTYPE|<!ENTITY/i.test(text),'워크북 DTD·엔터티는 지원하지 않습니다.','UNSUPPORTED_OBJECT');
-      const doc=new DOMParser({onError:()=>reject('잘못된 워크북 XML입니다.')}).parseFromString(text,'application/xml');documents.set(file,doc);return doc;
+      let doc;try{doc=new DOMParser({onError:()=>reject('잘못된 워크북 XML입니다.')}).parseFromString(text,'application/xml');}catch{reject('잘못된 워크북 XML입니다.');}
+      documents.set(file,doc);return doc;
     };
     for(const name of Object.keys(parts)){
       if(name.endsWith('/'))continue;
