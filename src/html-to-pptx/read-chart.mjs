@@ -90,12 +90,12 @@ function range(formula,workbook){
   requireValue(x2>=x1&&y2>=y1&&x2<=16384&&y2<=1048576&&(x1===x2||y1===y2)&&(x2-x1+1)*(y2-y1+1)<=1000,'차트 셀 범위가 너무 크거나 단일 행·열이 아닙니다.');
   const values=[];for(let y=y1;y<=y2;y++)for(let x=x1;x<=x2;x++){const key=`${name(x)}${y}`;requireValue(cells.has(key),'차트의 현재 셀이 비어 있거나 없습니다.','CHART_DATA_MISMATCH');values.push(cells.get(key));}return values;
 }
-function referenced(parent,kind,workbook){
+function referenced(parent,kind,workbook,{allowNumericFormat=false}={}){
   const numericKind=kind==='num',multi=kind==='str'&&parent?.localName==='cat'&&!!one(parent,'multiLvlStrRef'),refName=multi?'multiLvlStrRef':kind+'Ref',cacheName=multi?'multiLvlStrCache':kind+'Cache';allowed(parent,[refName]);const ref=one(parent,refName,true);allowed(ref,['f',cacheName]);
   const values=range(one(ref,'f',true).textContent,workbook),cache=one(ref,cacheName,true);allowed(cache,multi?['ptCount','lvl','extLst']:['formatCode','ptCount','pt','extLst']);extensions(one(cache,'extLst'));
   // PptxGenJS wraps even a single category level; true multilevel labels remain unsupported.
   const points=multi?one(cache,'lvl',true):cache;if(multi)allowed(points,['pt']);
-  if(numericKind)requireValue((one(cache,'formatCode')?.textContent??'General')==='General','서식이 지정된 차트 수치는 아직 지원하지 않습니다.');
+  if(numericKind&&!allowNumericFormat)requireValue((one(cache,'formatCode')?.textContent??'General')==='General','서식이 지정된 차트 수치는 아직 지원하지 않습니다.');
   requireValue(index(one(cache,'ptCount',true))===values.length&&children(points,'pt').length===values.length,'현재 셀 수와 차트 캐시 수가 다릅니다.','CHART_DATA_MISMATCH');
   const seen=new Set();for(const point of children(points,'pt')){
     allowed(point,['v']);const i=index(point,'idx');requireValue(i<values.length&&!seen.has(i),'차트 캐시 인덱스가 중복되거나 범위를 벗어났습니다.','CHART_DATA_MISMATCH');seen.add(i);
@@ -104,8 +104,28 @@ function referenced(parent,kind,workbook){
   }return values;
 }
 
-export function readChartPackage(parts,chartPath,{budget,contentTypeFor,workbooks=new Map()}={}){
-  const diagnostics=[],presentationWarnings=[];let workbookPath=null,referencedWorkbookPath=null,verifiedWorkbookPath=null;
+// Before handing a chart to Office, check all chart formulas and caches, not
+// just the first presentation property that the editable reader understands.
+function validateFallbackData(root,workbook){
+  // An unsupported visual option must not hide malformed values later in XML.
+  flag(one(root,'date1904'));flag(one(root,'roundedCorners'));
+  const chartStyle=one(root,'style');if(chartStyle){const v=attrs(chartStyle,'val');requireValue(/^\d+$/.test(v??'')&&Number(v)>=1&&Number(v)<=48&&!elements(chartStyle).length,'차트 스타일 번호가 올바르지 않습니다.','INPUT_INVALID');}
+  const refs=[],formulas=[];
+  const walk=n=>{for(const c of elements(n)){
+    if(c.namespaceURI===C&&['strRef','numRef','multiLvlStrRef'].includes(c.localName))refs.push(c);
+    if(c.namespaceURI===C&&c.localName==='f')formulas.push(c);
+    if(c.namespaceURI===C&&c.localName==='gapWidth'){const v=attrs(c,'val');requireValue(/^\d+$/.test(v??'')&&Number(v)<=500,'막대 간격 값이 올바르지 않습니다.','INPUT_INVALID');}
+    walk(c);
+  }};walk(root);
+  requireValue(refs.length>0&&refs.length<=1000&&formulas.length===refs.length,'차트 데이터 참조를 안전하게 검증할 수 없습니다.');
+  for(const ref of refs){
+    requireValue(formulas.includes(one(ref,'f',true)),'차트 수식의 위치가 올바르지 않습니다.','INPUT_INVALID');
+    referenced(ref.parentNode,ref.localName==='numRef'?'num':'str',workbook,{allowNumericFormat:true});
+  }
+}
+
+export function readChartPackage(parts,chartPath,{budget,contentTypeFor,workbooks=new Map(),allowImageFallback=false}={}){
+  const diagnostics=[],presentationWarnings=[];let workbookPath=null,referencedWorkbookPath=null,verifiedWorkbookPath=null,fallbackRoot=null,fallbackWorkbook=null;
   try{
     requireValue(typeof contentTypeFor==='function'&&contentTypeFor(chartPath)===CHART,'지원하는 차트 ContentType이 아닙니다.');
     const xml=file=>{requireValue(parts[file] instanceof Uint8Array&&parts[file].length>0&&parts[file].length<=16*1024*1024,'차트 부분이 없거나 크기 제한을 초과했습니다.','INPUT_INVALID');const value=strFromU8(parts[file]);requireValue(!/<!DOCTYPE|<!ENTITY/i.test(value),'DTD·엔터티는 지원하지 않습니다.');try{return new DOMParser({onError:()=>reject('차트 XML이 잘못되었습니다.','INPUT_INVALID')}).parseFromString(value,'application/xml');}catch{reject('차트 XML이 잘못되었습니다.','INPUT_INVALID');}};
@@ -126,6 +146,7 @@ export function readChartPackage(parts,chartPath,{budget,contentTypeFor,workbook
     referencedWorkbookPath=workbookPath;
     if(!workbooks.has(workbookPath))workbooks.set(workbookPath,readChartWorkbook(parts[workbookPath],{budget}));
     const workbook=workbooks.get(workbookPath);if(workbook.diagnostics.some(d=>d.severity==='error'))return {content:null,style:null,workbookPath:null,referencedWorkbookPath,verifiedWorkbookPath:null,diagnostics:[...workbook.diagnostics]};verifiedWorkbookPath=workbookPath;
+    if(allowImageFallback){fallbackRoot=root;fallbackWorkbook=workbook;}
     allowed(root,['date1904','lang','roundedCorners','style','chart','spPr','txPr','externalData','extLst']);extensions(one(root,'extLst'));
     requireValue(!flag(one(root,'date1904'))&&!flag(one(root,'roundedCorners')),'이 차트 날짜·영역 서식은 지원하지 않습니다.');const chartStyle=one(root,'style');if(chartStyle){const value=attrs(chartStyle,'val');requireValue(/^\d+$/.test(value??'')&&Number(value)>=1&&Number(value)<=48&&!elements(chartStyle).length,'차트 스타일 번호가 올바르지 않습니다.','INPUT_INVALID');if(value!=='2')presentationWarnings.push('선택한 차트 스타일은 아직 재현하지 못합니다.');}area(one(root,'spPr'));
     const chart=one(root,'chart',true);allowed(chart,['title','autoTitleDeleted','plotArea','legend','plotVisOnly','dispBlanksAs','showDLblsOverMax','extLst']);extensions(one(chart,'extLst'));
@@ -201,7 +222,9 @@ export function readChartPackage(parts,chartPath,{budget,contentTypeFor,workbook
     const validation=validateChart(content);requireValue(validation.valid,'현재 차트 값·축이 지원 계약에 맞지 않습니다.','INPUT_INVALID');
     // Only these known presentation-only differences can be recovered. Reach this
     // point only after package safety, all formulas/caches, axes and model checks.
-    if(presentationWarnings.length){for(const message of presentationWarnings)diagnostics.push({...diagnostic('UNSUPPORTED_OBJECT',message),recoverable:true,reasonKey:'PPTX_CHART_PRESENTATION_UNSUPPORTED'});return {content:null,style:null,workbookPath:null,referencedWorkbookPath,verifiedWorkbookPath,diagnostics};}
+    if(presentationWarnings.length){for(const message of presentationWarnings)diagnostics.push({...diagnostic('UNSUPPORTED_OBJECT',message),recoverable:true,reasonKey:'PPTX_CHART_PRESENTATION_UNSUPPORTED'});return {content:null,style:null,workbookPath:null,referencedWorkbookPath,verifiedWorkbookPath,diagnostics,imageFallbackEligible:allowImageFallback};}
     return {content,style,workbookPath,referencedWorkbookPath,verifiedWorkbookPath,diagnostics};
-  }catch(e){diagnostics.push({...diagnostic(['INPUT_INVALID','UNSUPPORTED_OBJECT','CHART_DATA_MISMATCH','LIMIT_EXCEEDED'].includes(e.code)?e.code:'INPUT_INVALID',e.message),...(e.chartDetail?{chartDetail:e.chartDetail}:{})});return {content:null,style:null,workbookPath:null,referencedWorkbookPath,verifiedWorkbookPath,diagnostics};}
+  }catch(error){let e=error,imageFallbackEligible=false;
+    if(e.code==='UNSUPPORTED_OBJECT'&&fallbackRoot&&fallbackWorkbook){try{validateFallbackData(fallbackRoot,fallbackWorkbook);imageFallbackEligible=true;}catch(validationError){e=validationError;}}
+    diagnostics.push({...diagnostic(['INPUT_INVALID','UNSUPPORTED_OBJECT','CHART_DATA_MISMATCH','LIMIT_EXCEEDED'].includes(e.code)?e.code:'INPUT_INVALID',e.message),...(e.chartDetail?{chartDetail:e.chartDetail}:{})});return {content:null,style:null,workbookPath:null,referencedWorkbookPath,verifiedWorkbookPath,diagnostics,imageFallbackEligible};}
 }

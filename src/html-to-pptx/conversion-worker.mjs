@@ -6,6 +6,7 @@ import {exportHtml} from './export-html.mjs';
 import {createBrowserRuntime} from './browser-runtime.mjs';
 import {chartText,validateChart} from './charts.mjs';
 import {sha256} from './assets.mjs';
+import {renderPowerPointChartImages} from './powerpoint-chart-images.mjs';
 
 let runtime=null,cancelled=false,started=false,finished=false;
 const limit=condition=>{if(condition)throw Object.assign(new Error('INPUT_LIMIT'),{code:'INPUT_LIMIT'});};
@@ -43,7 +44,7 @@ process.on('message',async message=>{
       result=await analyzeHtml(message.input);
     }else if(message.operation==='analyze-pptx'){
       const bytes=message.input instanceof Uint8Array?message.input:message.input.bytes,options=message.input instanceof Uint8Array?{}:message.input.options;
-      const parsed=await readPptx(bytes,options);checkModel(parsed.model);
+      const parsed=await readPptx(bytes,options,{renderChartImages:renderPowerPointChartImages});checkModel(parsed.model);
       const input={profile:'pptx-v1',source:{sha256:sha256(bytes)},options};
       let measured={model:parsed.model,measurements:[],environment:{},diagnostics:[...parsed.diagnostics],previews:[]};
       if(parsed.status==='parsed'){
@@ -77,7 +78,7 @@ process.on('message',async message=>{
       checkModel(message.input.model);result=await exportPptx(message.input,{fontEmbedding:message.input.model.fonts?.length?'auto':'off'});
       limit(result.pptxBytes?.length>64*1024*1024);
     }else if(message.operation==='read-pptx'){
-      result=await readPptx(message.input instanceof Uint8Array?message.input:message.input.bytes,message.input instanceof Uint8Array?{}:message.input.options);checkModel(result.model);
+      result=await readPptx(message.input instanceof Uint8Array?message.input:message.input.bytes,message.input instanceof Uint8Array?{}:message.input.options,{renderChartImages:renderPowerPointChartImages});checkModel(result.model);
     }else if(message.operation==='export-html'){
       checkModel(message.input);result=exportHtml(message.input);
     }else throw new Error('INPUT_INVALID');
