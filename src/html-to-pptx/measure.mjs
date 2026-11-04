@@ -7,6 +7,7 @@ import {collectFontAssets} from './font-assets.mjs';
 import {normalizeWoff2Fonts} from './woff2-fonts.mjs';
 import {applyFallbackFont} from './fallback-font.mjs';
 import {renderChartSvg} from './charts.mjs';
+import {officeCompatiblePresetGradient,presetVectorMarkup} from './preset-vector.mjs';
 
 export function scopeEmbeddedModelErrors(errors,slides){
   return errors.map(error=>{const match=/^slides\[(\d+)\]\./.exec(error.path),slide=match?slides[Number(match[1])]:null;return diagnostic('INPUT_INVALID',`${error.path}: ${error.message}`,slide?{slideId:slide.id}:{});});
@@ -418,10 +419,24 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
         if(runs.map(r=>r.text).join('')!==text)at('UNSUPPORTED_OBJECT','화면 문구와 텍스트 조각의 공백·줄바꿈을 일치시킬 수 없습니다.');
         if(el!==root&&(style.backgroundImage!=='none'||visibleColor(style.fill)||style.strokeWidth>0)) {
           orderKeys.set(`${nodeId}::background`,domOrder.get(el));
-          nodes.push({id:`${nodeId}::background`,kind:'shape',boxCssPx:box,zOrder:order++,content:{},style:{...style},sourceRef,parentId:null});
+          nodes.push({id:`${nodeId}::background`,kind:'shape',boxCssPx:box,zOrder:order++,content:{},style:{...style},sourceRef,parentId:editable?(el.dataset.parentId??null):null});
         }
       }
       let content=kind==='text'?{text,runs,...(paragraphLines?{tableCellGroup:true}:{})}:kind==='image'?{assetId:el.dataset.assetId??null}:{};
+      if(editable&&kind==='text'){
+        const paragraphs=[...el.querySelectorAll('[data-pptx-paragraph]')];
+        if(paragraphs.length>1&&!paragraphs.some(p=>p.querySelector('[data-pptx-list-marker],br:not([data-pptx-empty])'))){
+          const parts=paragraphs.map((p,index)=>{
+            const cs=getComputedStyle(p),items=textRuns(p);
+            if(index<paragraphs.length-1&&items.at(-1)?.text.endsWith('\n')){items.at(-1).text=items.at(-1).text.slice(0,-1);if(!items.at(-1).text)items.pop();}
+            if(!items.length){const s=plainStyle(cs);items.push({text:'',style:s});}
+            return {beforePx:parseFloat(cs.paddingTop),afterPx:parseFloat(cs.paddingBottom),leftPx:parseFloat(cs.paddingLeft),rightPx:parseFloat(cs.paddingRight),indentPx:parseFloat(cs.textIndent),lineHeight:cs.lineHeight,align:cs.textAlign,runs:items};
+          });
+          if(parts.every(p=>p.leftPx===0&&p.rightPx===0&&p.indentPx===0&&Number.isFinite(p.beforePx)&&p.beforePx>=0&&p.beforePx<=20000&&Number.isFinite(p.afterPx)&&p.afterPx>=0&&p.afterPx<=20000&&/^\d+(?:\.\d+)?px$/.test(p.lineHeight)&&parseFloat(p.lineHeight)>0&&parseFloat(p.lineHeight)<=20000&&['left','center','right','justify'].includes(p.align)&&p.runs.every(r=>!r.text.includes('\n')))&&parts.map(p=>p.runs.map(r=>r.text).join('')).join('\n')===content.text){
+            content.paragraphs=parts;const d=diagnostics.findIndex(d=>d.code==='PARAGRAPH_SPACING_APPROXIMATED'&&d.slideId===id&&d.nodeId===nodeId);if(d>=0)diagnostics.splice(d,1);
+          }
+        }
+      }
       if(kind==='image'&&el.tagName==='IMG'){
         if(el.hasAttribute('data-pptx-rounded-image')){
           if(['TopLeft','TopRight','BottomRight','BottomLeft'].every(side=>st[`border${side}Radius`]==='50%'))content.rounding=true;
@@ -533,7 +548,7 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
     if(profile!=='project-data-v1'&&!nodes.length&&sourceHadScripts)issue('SCRIPT_REQUIRED','스크립트 없이 표시되는 장표 콘텐츠가 없습니다. 렌더된 정적 HTML을 제공해 주세요.',id);
     if(!layoutStable)issue('RENDER_INCOMPLETE','측정 중 레이아웃 경계가 바뀌었습니다.',id);
     nodes.sort((a,b)=>a.style.cssZIndex-b.style.cssZIndex||(orderKeys.get(a.id)??0)-(orderKeys.get(b.id)??0)||a.zOrder-b.zOrder);nodes.forEach((n,i)=>{n.zOrder=i;});
-    slides.push({id,widthCssPx:width,heightCssPx:height,background:{color:rootStyle.backgroundColor,image:rootStyle.backgroundImage},nodes});
+    slides.push({id,widthCssPx:width,heightCssPx:height,background:{color:rootStyle.backgroundColor,image:rootStyle.backgroundImage},nodes,...(editable&&root.dataset.pptxTransition?{transition:JSON.parse(root.dataset.pptxTransition)}:{})});
     measurements.push({slideId:id,referenceSize,renderScale,sourceTransformScale,layoutStable,objects,assetsReady:diagnostics.every(d=>d.code!=='RENDER_INCOMPLETE'),fontsReady:diagnostics.every(d=>d.code!=='FONT_UNAVAILABLE')});
   }
   const layoutSnapshot=[...document.querySelectorAll(`${selector},${selector} *`)].map(e=>{const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height];});
@@ -707,7 +722,7 @@ export async function measureInput(input,runtime) {
           if(n.kind==='image')n.content.assetId=input.assetRefs.find(r=>r.slideId===slide.id&&r.nodeId===n.id)?.assetId??null;
         }
         if(n.content.inlineSvg) {
-          try{const a=resolveAsset(`data:image/svg+xml;base64,${Buffer.from(n.content.inlineSvg).toString('base64')}`);if(!result.model.assets.some(x=>x.id===a.id))result.model.assets.push(a);n.content={assetId:a.id,...(n.content.artworkOnly?{artworkOnly:true}:{})};}
+          try{const a=resolveAsset(`data:image/svg+xml;base64,${Buffer.from(officeCompatiblePresetGradient(n.content.inlineSvg)).toString('base64')}`);if(!result.model.assets.some(x=>x.id===a.id))result.model.assets.push(a);const candidate=input.presetVectors?.find(v=>v.slideId===slide.id&&v.nodeId===n.id)?.vector,geometry=candidate&&presetVectorMarkup(candidate),native=candidate&&['ellipse','downArrow','rightArrow'].includes(candidate.shape)&&Math.abs(geometry.width-n.boxCssPx.w)<.1&&Math.abs(geometry.height-n.boxCssPx.h)<.1;n.content={assetId:a.id,...(n.content.artworkOnly?{artworkOnly:true}:{}),...(native?{editableVector:candidate}:{})};if(native)result.diagnostics=result.diagnostics.filter(d=>!(d.code==='PPTX_SHAPE_IMAGE_APPROXIMATED'&&d.slideId===slide.id&&d.nodeId===n.id));}
           catch(e){result.diagnostics.push(diagnostic('UNSUPPORTED_OBJECT',e.message,{slideId:slide.id,nodeId:n.id,sourceRef:n.sourceRef}));}
         }
         if(n.content.inlinePng){try{const a=resolveAsset(n.content.inlinePng);if(!result.model.assets.some(x=>x.id===a.id))result.model.assets.push(a);n.content={assetId:a.id,artworkOnly:true};}catch(e){result.diagnostics.push(diagnostic('UNSUPPORTED_OBJECT',e.message,{slideId:slide.id,nodeId:n.id,sourceRef:n.sourceRef}));}}

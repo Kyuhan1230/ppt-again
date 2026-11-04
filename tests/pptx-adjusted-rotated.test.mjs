@@ -30,7 +30,7 @@ test('adjusted rotated arrow and transformed theme ellipse remain editable SVG e
  const edited=out.html.replace('fill="#00b050"','fill="#123456"');assert.notEqual(edited,out.html);
  const runtime=await createBrowserRuntime({capture:false});try{
   const measured=await measureInput(await readInput({html:edited}),runtime);
-  assert.ok(measured.diagnostics.some(d=>d.code==='PPTX_SHAPE_IMAGE_APPROXIMATED'&&d.severity==='warning'));
+  assert.ok(!measured.diagnostics.some(d=>d.code==='PPTX_SHAPE_IMAGE_APPROXIMATED'&&d.severity==='warning'));
   assert.ok(!measured.diagnostics.some(d=>d.severity==='error'),JSON.stringify(measured.diagnostics));
   const editedNode=measured.model.slides[0].nodes.find(n=>n.id==='adjusted-arrow');
   const bytes=measured.model.assets.find(a=>a.id===editedNode.content.assetId).bytes;
@@ -78,4 +78,27 @@ test('editable vector rejects injected markup, external references and unbounded
  }
  const model=structuredClone(parsed.model);model.slides[0].nodes.find(n=>n.id==='adjusted-arrow').content.editableVector.fill='#123456" onload="alert(1)';
  assert.equal(exportHtml(model).status,'failed');
+});
+
+test('edited preset arrows return as native PPT shapes with their geometry and color',async()=>{
+ const {DOMParser,XMLSerializer:XMLSerializerForTest}=await import('@xmldom/xmldom'),{exportPptx}=await import('../src/html-to-pptx/export.mjs');
+ const parsed=await readPptx(zipSync(await fixture()),{allowPartial:true});let html=exportHtml(parsed.model).html;html=html.replace('fill="#00b050"','fill="#123456"');
+ const runtime=await createBrowserRuntime({capture:false});try{
+  const m=await measureInput(await readInput({html}),runtime),out=await exportPptx(m);assert.equal(out.status,'generated',JSON.stringify(out.diagnostics));
+  const doc=new DOMParser().parseFromString(strFromU8(unzipSync(out.pptxBytes)['ppt/slides/slide1.xml']),'application/xml');
+  const shapes=[...doc.getElementsByTagNameNS('*','sp')],arrow=shapes.find(s=>s.getElementsByTagNameNS('*','cNvPr')[0]?.getAttribute('name')==='adjusted-arrow');
+  assert.ok(arrow,'editable arrow is a native shape');assert.equal(arrow.getElementsByTagNameNS('*','prstGeom')[0].getAttribute('prst'),'downArrow');
+  assert.match(new XMLSerializerForTest().serializeToString(arrow),/123456/i);
+  const guides=[...arrow.getElementsByTagNameNS('*','gd')];assert.ok(guides.some(g=>g.getAttribute('name')==='adj1'&&g.getAttribute('fmla')==='val 34830'));
+ }finally{await runtime.close();}
+});
+
+
+test('edited SVG geometry falls back to picture rather than reviving stale preset data',async()=>{
+ const {exportPptx}=await import('../src/html-to-pptx/export.mjs');const parsed=await readPptx(zipSync(await fixture()),{allowPartial:true}),original=exportHtml(parsed.model).html;
+ const html=original.replace(/(<path d="M )(-?\d+(?:\.\d+)?)/,(_,prefix,value)=>prefix+(Number(value)+1));assert.notEqual(html,original);
+ const runtime=await createBrowserRuntime({capture:false});try{const m=await measureInput(await readInput({html}),runtime);const n=m.model.slides[0].nodes.find(n=>n.id==='adjusted-arrow');
+ assert.ok(!n.content.editableVector);assert.ok(m.diagnostics.some(d=>d.nodeId==='adjusted-arrow'&&d.code==='PPTX_SHAPE_IMAGE_APPROXIMATED'));
+ const out=await exportPptx(m);assert.equal(out.status,'generated',JSON.stringify(out.diagnostics));assert.equal(out.objectMap.find(x=>x.sourceNodeId==='adjusted-arrow').support,'picture');
+ }finally{await runtime.close();}
 });

@@ -1,5 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import PptxGenJS from 'pptxgenjs';import {unzipSync,zipSync,strFromU8,strToU8} from 'fflate';
 import {addNativeChart} from '../src/html-to-pptx/write-chart.mjs';import {readPptx} from '../src/html-to-pptx/read-pptx.mjs';import {exportHtml} from '../src/html-to-pptx/export-html.mjs';import {readChartPackage} from '../src/html-to-pptx/read-chart.mjs';import {createPackageBudget} from '../src/html-to-pptx/package-budget.mjs';
+import {publicDiagnostic} from '../src/html-to-pptx/public-diagnostics.mjs';
 let originalPromise;
 async function fixture(){originalPromise??=(async()=>{const p=new PptxGenJS();p.layout='LAYOUT_WIDE';const s=p.addSlide();s.background={color:'FFFFFF'};s.addText('Keep this neighboring text',{x:1,y:.2,w:8,h:.5,fontFace:'Arial',fontSize:20,objectName:'safe-title'});addNativeChart(s,{id:'linked-chart',kind:'chart',boxCssPx:{x:96,y:96,w:700,h:360},style:{fontFamily:'Arial',fontSize:16},content:{type:'bar',categories:['A','B'],series:[{name:'Series',values:[10,20],color:'#1976d2'}],title:'QA chart',legend:true,axes:{}}},{pointScale:.75,resolveFont:()=>({fontFace:'Arial'})});return unzipSync(new Uint8Array(await p.write({outputType:'uint8array'})));})();return {...await originalPromise};}
 const change=(parts,path,fn)=>parts[path]=strToU8(fn(strFromU8(parts[path])));
@@ -10,10 +11,67 @@ const workbookPath=parts=>Object.keys(parts).find(k=>k.endsWith('.xlsx'));
 function direct(parts){return readChartPackage(parts,chartPath,{budget:createPackageBudget(),contentTypeFor:p=>p===chartPath?'application/vnd.openxmlformats-officedocument.drawingml.chart+xml':p.endsWith('.xlsx')?'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':null});}
 const read=(parts,allowPartial=true)=>readPptx(zipSync(parts),{allowPartial,fontPolicy:'pretendard'});
 test('default bar chart stays fully supported',async()=>{const parts=await fixture();const result=direct(parts);assert.ok(result.content);assert.equal(result.verifiedWorkbookPath,workbookPath(parts));assert.equal((await read(parts)).status,'parsed');});
-for(const [name,modify] of [['gap 50',gap50],['chart style 9',style9]]){
+for(const [name,modify] of [['chart style 9',style9]]){
  test(`${name}: validated linked workbook is not orphaned; partial preserves sibling and placeholder`,async()=>{const parts=modify(await fixture()),component=direct(parts);assert.equal(component.content,null);assert.equal(component.verifiedWorkbookPath,workbookPath(parts));assert.ok(component.diagnostics.every(d=>d.recoverable===true));const r=await read(parts);assert.equal(r.status,'parsed',JSON.stringify(r.diagnostics));assert.ok(r.model.slides[0].nodes.some(n=>n.id==='safe-title'));assert.ok(!r.model.slides[0].nodes.some(n=>n.kind==='chart'));assert.ok(r.diagnostics.some(d=>d.code==='PPTX_OBJECT_PLACEHOLDER'&&d.reasonKey==='PPTX_CHART_PRESENTATION_UNSUPPORTED'));const html=exportHtml(r.model).html;assert.match(html,/Keep this neighboring text/);assert.match(html,/변환하지 못한/);assert.ok(!r.model.assets.some(a=>a.mime?.includes('spreadsheet')));const strict=await read(parts,false);assert.equal(strict.status,'failed');assert.ok(!strict.diagnostics.some(d=>/연결되지 않은 내장/.test(d.message)));});
 }
+test('valid bar spacing, including the Office default, remains an editable chart',async()=>{
+ for(const [gap,modify] of [[0,x=>x.replace('<c:gapWidth val="33"/>','<c:gapWidth val="0"/>')],[50,x=>x.replace('<c:gapWidth val="33"/>','<c:gapWidth val="50"/>')],[150,x=>x.replace('<c:gapWidth val="33"/>','')],[500,x=>x.replace('<c:gapWidth val="33"/>','<c:gapWidth val="500"/>')]]){
+  const parts=await fixture();change(parts,chartPath,modify);const component=direct(parts);
+  assert.ok(component.content,JSON.stringify(component.diagnostics));assert.equal(component.content.gapWidth,gap);assert.equal(component.verifiedWorkbookPath,workbookPath(parts));
+  const result=await read(parts);assert.equal(result.status,'parsed',JSON.stringify(result.diagnostics));
+  const chart=result.model.slides[0].nodes.find(n=>n.kind==='chart');assert.equal(chart.content.gapWidth,gap);assert.match(exportHtml(result.model).html,/data-chart-id=/);
+ }
+});
 test('unsupported chart style cannot mask a changed data cache',async()=>{const parts=style9(await fixture());change(parts,chartPath,x=>x.replace('<c:v>10</c:v>','<c:v>999</c:v>'));const c=direct(parts);assert.ok(c.diagnostics.some(d=>d.code==='CHART_DATA_MISMATCH'));assert.ok(!c.diagnostics.some(d=>d.recoverable));assert.equal((await read(parts)).status,'failed');});
+test('a linked workbook is validated before an unsupported chart root is classified',async()=>{
+ const parts=await fixture(),before=strFromU8(parts[chartPath]);change(parts,chartPath,x=>x.replace('<c:chart>','<c:unsupportedFeature/><c:chart>'));
+ assert.notEqual(strFromU8(parts[chartPath]),before);
+ const component=direct(parts);assert.equal(component.content,null);assert.equal(component.verifiedWorkbookPath,workbookPath(parts));
+ const result=await read(parts);assert.equal(result.status,'failed');
+ assert.ok(result.diagnostics.some(d=>d.objectName==='linked-chart'&&d.blocking===true));
+ assert.ok(!result.diagnostics.some(d=>['PPTX_UNUSED_EMBEDDED_PACKAGE','PPTX_UNEXPECTED_PACKAGE_RELATIONSHIP'].includes(d.reasonKey)),JSON.stringify(result.diagnostics));
+});
+test('an invalid but linked workbook is not misreported as an unrelated embedded file',async()=>{
+ const parts=await fixture(),file=workbookPath(parts),wb=unzipSync(parts[file]);wb['xl/workbook.xml']=strToU8('<broken>');parts[file]=zipSync(wb);
+ const result=await read(parts);assert.equal(result.status,'failed');assert.equal(result.model,null);
+ const chart=result.diagnostics.find(d=>d.objectName==='linked-chart'&&d.blocking===true);assert.ok(chart);
+ assert.match(publicDiagnostic(chart).reason,/워크북 XML/);
+ assert.ok(!result.diagnostics.some(d=>['PPTX_UNUSED_EMBEDDED_PACKAGE','PPTX_UNEXPECTED_PACKAGE_RELATIONSHIP'].includes(d.reasonKey)),JSON.stringify(result.diagnostics));
+});
+test('malformed chart XML reports an unverified relationship, not a proven orphan',async()=>{
+ const parts=await fixture(),before=strFromU8(parts[chartPath]);change(parts,chartPath,x=>x.replace('</c:chartSpace>','</wrong>'));
+ assert.notEqual(strFromU8(parts[chartPath]),before);const result=await read(parts);
+ assert.equal(result.status,'failed');assert.equal(result.model,null);
+ const chart=result.diagnostics.find(d=>d.objectName==='linked-chart'&&d.blocking);assert.ok(chart,JSON.stringify(result.diagnostics));
+ assert.match(publicDiagnostic(chart).reason,/차트 XML/);
+ assert.ok(result.diagnostics.some(d=>d.reasonKey==='PPTX_EMBEDDED_LINK_UNVERIFIED'&&d.blocking));
+ assert.ok(!result.diagnostics.some(d=>d.reasonKey==='PPTX_UNUSED_EMBEDDED_PACKAGE'));
+});
+test('a genuinely unrelated workbook is still blocked when another linked workbook fails',async()=>{
+ const parts=await fixture(),file=workbookPath(parts),original=parts[file],wb=unzipSync(original);wb['xl/workbook.xml']=strToU8('<broken>');parts[file]=zipSync(wb);
+ parts['ppt/embeddings/unused.xlsx']=original;
+ const result=await read(parts);assert.equal(result.status,'failed');assert.equal(result.model,null);
+ assert.ok(result.diagnostics.some(d=>d.objectName==='linked-chart'&&d.blocking===true));
+ assert.ok(result.diagnostics.some(d=>d.reasonKey==='PPTX_UNUSED_EMBEDDED_PACKAGE'));
+});
+test('a chart error reports that its workbook has hidden rows',async()=>{
+ const parts=await fixture(),file=workbookPath(parts),wb=unzipSync(parts[file]);
+ const sheet=Object.keys(wb).find(k=>/^xl\/worksheets\/sheet\d+\.xml$/.test(k)),before=strFromU8(wb[sheet]);
+ change(wb,sheet,x=>x.replace('<row ','<row hidden="1" '));assert.notEqual(strFromU8(wb[sheet]),before);parts[file]=zipSync(wb);
+ const result=await read(parts),chart=result.diagnostics.find(d=>d.objectName==='linked-chart'&&d.blocking);
+ assert.equal(result.status,'failed');assert.ok(chart,JSON.stringify(result.diagnostics));
+ assert.match(publicDiagnostic(chart).reason,/숨긴 행·열/);assert.ok(!result.diagnostics.some(d=>d.reasonKey==='PPTX_UNUSED_EMBEDDED_PACKAGE'));
+});
+test('a chart error reports a known unsupported grouping value',async()=>{
+ const parts=await fixture(),before=strFromU8(parts[chartPath]);change(parts,chartPath,x=>x.replace('<c:grouping val="clustered"/>','<c:grouping val="stacked"/>'));
+ assert.notEqual(strFromU8(parts[chartPath]),before);const result=await read(parts),chart=result.diagnostics.find(d=>d.objectName==='linked-chart'&&d.blocking);
+ assert.equal(result.status,'failed');assert.ok(chart,JSON.stringify(result.diagnostics));assert.match(publicDiagnostic(chart).reason,/grouping.*stacked/);
+});
+test('a chart error identifies a known unsupported chart type',async()=>{
+ const parts=await fixture(),before=strFromU8(parts[chartPath]);change(parts,chartPath,x=>x.replace('<c:barChart>','<c:scatterChart/><c:barChart>'));
+ assert.notEqual(strFromU8(parts[chartPath]),before);const result=await read(parts),chart=result.diagnostics.find(d=>d.objectName==='linked-chart'&&d.blocking);
+ assert.equal(result.status,'failed');assert.ok(chart,JSON.stringify(result.diagnostics));assert.match(publicDiagnostic(chart).reason,/scatterChart/);
+});
 for(const attack of ['external relationship','macro member','malformed workbook XML']){
  test(`unsupported style cannot bypass ${attack}`,async()=>{const parts=style9(await fixture()),file=workbookPath(parts),wb=unzipSync(parts[file]);if(attack==='external relationship')change(wb,'xl/_rels/workbook.xml.rels',x=>x.replace('</Relationships>','<Relationship Id="external" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="https://example.test/private" TargetMode="External"/></Relationships>'));if(attack==='macro member')wb['xl/vbaProject.bin']=new Uint8Array([0,1,2]);if(attack==='malformed workbook XML')wb['xl/workbook.xml']=strToU8('<broken>');parts[file]=zipSync(wb);const c=direct(parts);assert.equal(c.verifiedWorkbookPath,null);assert.ok(c.diagnostics.some(d=>d.severity==='error'));assert.ok(!c.diagnostics.some(d=>d.recoverable));const r=await read(parts);assert.equal(r.status,'failed');assert.equal(r.model,null);});
 }

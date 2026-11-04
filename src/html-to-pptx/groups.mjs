@@ -4,10 +4,12 @@ const P='http://schemas.openxmlformats.org/presentationml/2006/main',A='http://s
 const all=(n,name)=>[...n.getElementsByTagNameNS('*',name)];
 export function groupDiagnostics(slide){
   const errors=[],leaves=[...slide.nodes].filter(n=>n.kind!=='group').sort((a,b)=>a.zOrder-b.zOrder);
+  const childrenOf=id=>slide.nodes.filter(n=>n.parentId===id);
+  const descendants=group=>childrenOf(group.id).flatMap(n=>n.kind==='group'?descendants(n):[n]);
   for(const group of slide.nodes.filter(n=>n.kind==='group')){
-    const children=slide.nodes.filter(n=>n.parentId===group.id),indices=children.map(n=>leaves.indexOf(n)).sort((a,b)=>a-b);
-    if(group.parentId||group.style.rotation||children.some(n=>n.kind==='group'||n.style.rotation))errors.push({group,message:'중첩·회전 그룹은 지원하지 않습니다.'});
-    else if(!children.length||indices.some((n,i)=>n!==indices[0]+i))errors.push({group,message:'그룹 구성원이 겹침 순서에서 연속되지 않습니다.'});
+    const children=childrenOf(group.id),indices=descendants(group).map(n=>leaves.indexOf(n)).sort((a,b)=>a-b);
+    if(group.style.rotation||children.some(n=>n.style.rotation))errors.push({group,message:'회전 그룹은 지원하지 않습니다.'});
+    else if(!children.length||!indices.length||indices.some((n,i)=>n!==indices[0]+i))errors.push({group,message:'그룹 구성원이 겹침 순서에서 연속되지 않습니다.'});
   }
   return errors;
 }
@@ -31,7 +33,8 @@ export function applyFlatGroups(bytes,model,objectMap,pointScale){
       const properties=[...nv.parentNode.parentNode.childNodes].find(n=>n.localName==='spPr'),line=[...properties.childNodes].find(n=>n.localName==='ln'),empty=create(A,'a:ln');
       empty.appendChild(create(A,'a:noFill'));if(line)properties.replaceChild(empty,line);else properties.appendChild(empty);
     }
-    for(const group of groups){
+    const depth=group=>{let n=group,d=0;while(n.parentId){n=groups.find(g=>g.id===n.parentId);if(!n)break;d++;}return d;};
+    for(const group of [...groups].sort((a,b)=>depth(b)-depth(a))){
       const childIds=new Set(slide.nodes.filter(n=>n.parentId===group.id).map(n=>n.id)),entries=objectMap.filter(e=>e.pptSlideNumber===i+1&&(childIds.has(e.sourceNodeId)||childIds.has(e.derivedFrom))),pptIds=new Set(entries.map(e=>e.pptObjectId));
       const members=[...tree.childNodes].filter(n=>n.nodeType===1&&pptIds.has(Number(all(n,'cNvPr')[0]?.getAttribute('id'))));
       if(members.length!==entries.length)throw new Error('Group output correspondence missing');

@@ -1,10 +1,10 @@
 import {renderDiagnostics,validBounds} from './diagnostic-view.js';
 import {selectedFileState,sourceType} from './input-policy.js';
 const $=id=>document.getElementById(id);
+$('quality-note').hidden=true;
 const hints=[...document.querySelectorAll('.hint-wrap')];
 for(const hint of hints){for(const event of ['pointerenter','focusin','click'])hint.addEventListener(event,()=>{delete hint.dataset.dismissed;});}
 document.addEventListener('keydown',event=>{if(event.key==='Escape')for(const hint of hints)if(hint.matches(':hover')||hint.contains(document.activeElement))hint.dataset.dismissed='true';});
-$('quality-note').hidden=true;
 let revision=0,controller=null,currentJob=null,busy=false;
 let sessionReady=null;
 const longDeckLimit=20;

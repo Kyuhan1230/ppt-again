@@ -17,6 +17,10 @@ test('public diagnostics redact paths, markup, raw exceptions and unknown reason
  const d=publicDiagnostic({code:'UNSUPPORTED_OBJECT',reasonKey:'SECRET_RAW',objectName:'secret',message:'raw stack secret'});
  assert.equal(d.objectName,undefined);assert.equal(d.reason,undefined);assert.doesNotMatch(JSON.stringify(d),/secret/i);
 });
+test('chart details use only known safe messages and property values',()=>{
+ const d=publicDiagnostic({code:'UNSUPPORTED_OBJECT',severity:'error',blocking:true,objectType:'chart',reasonKey:'PPTX_CHART_UNSUPPORTED',message:'SECRET /private/chart',chartDetail:{element:'grouping',attribute:'val',value:'<secret>'}});
+ assert.doesNotMatch(JSON.stringify(d),/secret|private|<secret>/i);assert.match(d.reason,/검증/);
+});
 test('HTML-origin diagnostics do not newly disclose selectors or user text',()=>{
  const d=publicDiagnostic({code:'ASSET_MISSING',message:'sensitive-value.png',nodeId:'sensitive-value',sourceRef:{path:'sensitive-value'}});
  assert.doesNotMatch(JSON.stringify(d),/sensitive-value/);assert.equal(d.slideNumber,null);

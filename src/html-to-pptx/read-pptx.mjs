@@ -15,6 +15,7 @@ import {validPresetVector,presetVectorMarkup} from './preset-vector.mjs';
 import {snippedTextGeometry,snippedTextSvg} from './snip-text.mjs';
 import {simpleOuterShadow} from './shadow.mjs';
 import {nearlyEllipticalGeometry} from './ellipse-geometry.mjs';
+import {readTransition} from './transitions.mjs';
 
 const elements=n=>[...(n?.childNodes??[])].filter(c=>c.nodeType===1);
 const child=(n,name)=>elements(n).find(c=>c.localName===name);
@@ -163,6 +164,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
     ['그룹 좌표·배율이 잘못되었습니다.','PPTX_INVALID_COORDINATES'],
     ['그림 자르기 좌표가 잘못되었습니다.','PPTX_INVALID_CROP'],
     ['현재 차트에 연결되지 않은 내장 문서는 지원하지 않습니다.','PPTX_UNUSED_EMBEDDED_PACKAGE'],
+    ['차트 오류로 내장 문서의 연결을 확인하지 못했습니다.','PPTX_EMBEDDED_LINK_UNVERIFIED'],
     ['검증한 차트 workbook 외의 패키지 관계는 지원하지 않습니다.','PPTX_UNEXPECTED_PACKAGE_RELATIONSHIP'],
     ['잘못된 PPTX XML입니다.','PPTX_XML_INVALID'],
     ['PPTX 필수 부분이 없습니다.','PPTX_REQUIRED_PART_MISSING'],
@@ -208,7 +210,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
       if(!key||map.has(key))throw new Error('PPTX ContentType 선언이 중복되거나 없습니다.');map.set(key,attr(node,'ContentType'));
     }
     const contentTypeFor=part=>overrides.get('/'+part)??defaults.get(path.posix.extname(part).slice(1).toLowerCase());
-    const workbooks=new Map(),chartPackages=new Map(),usedWorkbooks=new Set(),usedCharts=new Set();let chartPoints=0;
+    const workbooks=new Map(),chartPackages=new Map(),usedWorkbooks=new Set(),usedCharts=new Set(),blockedChartWorkbooks=new Map(),unverifiedChartTargets=new Set();let chartPoints=0;
     // Inspect every relationship, including unused external/OLE/script packages.
     for(const name of Object.keys(parts)){
       if(!name.endsWith('/')&&/vbaProject|activeX/i.test(name)||/macroEnabled|vbaProject|activeX|oleObject/i.test(contentTypeFor(name)??''))throw new Error('매크로·ActiveX·OLE 문서는 지원하지 않습니다.');
@@ -275,10 +277,10 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
       const file=presRels.get(attr(ref,'r:id')),doc=xml(file),rels=relationships(file),tree=all(doc,'spTree')[0];
       const slide={id:`slide-${index+1}`,widthCssPx:px(model.pptxSizeEmu.width),heightCssPx:px(model.pptxSizeEmu.height),background:{color:'#ffffff',image:'none'},nodes:[]};model.slides.push(slide);
       let activeNodeId=null;
-      const issue=(message,nodeId=null,explicitReason=null)=>{
+      const issue=(message,nodeId=null,explicitReason=null,styleDetail=null)=>{
         nodeId??=activeNodeId;
         const reasonKey=/명시적 글꼴·크기가 없는 상속/.test(message)?'PPTX_INHERITED_TEXT_UNRESOLVED':/테마·시스템 색/.test(message)?'PPTX_THEME_COLOR_UNSUPPORTED':/상속된 도형 채움·선·효과/.test(message)?'PPTX_INHERITED_SHAPE_STYLE_UNSUPPORTED':/테마 배경|단색 외의 PPT 배경/.test(message)?'PPTX_THEME_BACKGROUND_UNSUPPORTED':/마스터·레이아웃/.test(message)?'PPTX_MASTER_ARTWORK_UNSUPPORTED':/타이밍·전환/.test(message)?'PPTX_ANIMATION_UNSUPPORTED':/회전·뒤집힌/.test(message)?'PPTX_OBJECT_ROTATION_UNSUPPORTED':/객체 위치/.test(message)?'PPTX_OBJECT_POSITION_UNSUPPORTED':/그룹/.test(message)?'PPTX_GROUP_TRANSFORM_UNSUPPORTED':/그림/.test(message)?'PPTX_IMAGE_UNSUPPORTED':/도형·채움·효과|도형 채움/.test(message)?'PPTX_SHAPE_EFFECT_UNSUPPORTED':/글꼴|텍스트|글자|문단|글머리/.test(message)?'PPTX_TEXT_STYLE_UNSUPPORTED':'PPTX_OBJECT_UNSUPPORTED';
-        diagnostics.push({...diagnostic('UNSUPPORTED_OBJECT',message,{slideId:slide.id,nodeId}),slideNumber:index+1,...(objectContexts.get(`${slide.id}:${nodeId}`)??{objectType:'background'}),reasonKey:explicitReason??reasonKey,recoverable:true});
+        diagnostics.push({...diagnostic('UNSUPPORTED_OBJECT',message,{slideId:slide.id,nodeId}),slideNumber:index+1,...(objectContexts.get(`${slide.id}:${nodeId}`)??{objectType:'background'}),reasonKey:explicitReason??reasonKey,recoverable:true,...(styleDetail?{styleDetail}:{})});
       };
       const inherited=new Set([...rels.values()].filter(p=>p.startsWith('ppt/slideLayouts/')));
       for(const layout of [...inherited])for(const target of relationships(layout).values())if(target.startsWith('ppt/slideMasters/'))inherited.add(target);
@@ -294,6 +296,8 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
       }
       const colorScheme=all(themeDoc,'clrScheme')[0];
       if(all(doc,'timing').length||all(doc,'transition').length){
+        const transitions=all(doc,'transition');
+        if(transitions.length){const preserved=readTransition(transitions[0]);if(preserved)slide.transition=preserved;}
         if(allowPartial){slide.animationOmitted=true;diagnostics.push({...diagnostic('PPTX_ANIMATION_OMITTED','애니메이션과 화면 전환은 정적 HTML에서 재현되지 않습니다.',{slideId:slide.id},'warning'),slideNumber:index+1,objectType:'background',reasonKey:'PPTX_ANIMATION_UNSUPPORTED'});}
         else issue('타이밍·전환 효과는 정적 HTML로 보존할 수 없습니다.');
       }
@@ -342,6 +346,21 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
       }
       const approximatedParagraphs=new Set();
       const textApproximations=new Set();
+      const layoutDocs=[...inherited].filter(p=>p.startsWith('ppt/slideLayouts/')).map(p=>xml(p));
+      const placeholder=sp=>{
+        const nv=child(sp,'nvSpPr'),props=child(nv,'nvPr'),ph=child(props,'ph');
+        return [sp,nv,props,ph].every(n=>n?.namespaceURI===P)?ph:null;
+      };
+      const placeholderMatches=(container,predicate)=>all(container,'sp').filter(sp=>{const p=placeholder(sp),parent=sp.parentNode;return parent?.namespaceURI===P&&parent.localName==='spTree'&&p&&predicate(p);});
+      const placeholderContext=owner=>{
+        const ph=placeholder(owner),index=attr(ph,'idx','0');
+        const layoutMatches=ph?layoutDocs.flatMap(doc=>placeholderMatches(doc,p=>attr(p,'idx','0')===index)):[];
+        const matchedLayout=layoutMatches.length===1?layoutMatches[0]:null;
+        const phType=attr(placeholder(matchedLayout),'type',attr(ph,'type','obj'));
+        let masterMatches=ph?placeholderMatches(masterDoc,p=>attr(p,'type','obj')===phType):[];
+        if(ph&&phType==='ctrTitle'&&!masterMatches.length)masterMatches=placeholderMatches(masterDoc,p=>attr(p,'type','obj')==='title');
+        return {ph,matchedLayout,phType,masterShape:masterMatches.length===1?masterMatches[0]:null,ambiguousLayout:layoutMatches.length>1};
+      };
       const readText=(tx,id)=>{
       const body=child(tx,'bodyPr'),paras=elements(tx).filter(n=>n.localName==='p'),runs=[];
       const approximate=(reasonKey,message)=>{const key=`${id}:${reasonKey}`;if(!textApproximations.has(key)){textApproximations.add(key);diagnostics.push({...diagnostic('PARAGRAPH_SPACING_APPROXIMATED',message,{slideId:slide.id,nodeId:id},'warning'),reasonKey});}};
@@ -349,16 +368,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
       // also inherit the corresponding layout/master placeholder's text style.
       // Ambiguous placeholder matches are not guessed.
       const owner=tx?.parentNode?.localName==='sp'?tx.parentNode:null;
-      const placeholder=sp=>child(child(child(sp,'nvSpPr'),'nvPr'),'ph');
-      const ph=placeholder(owner),layouts=ph?[...inherited].filter(p=>p.startsWith('ppt/slideLayouts/')).map(p=>xml(p)):[];
-      const findPlaceholder=(container,byIndex,type,index)=>{
-        const found=all(container,'sp').filter(sp=>{const p=placeholder(sp);return p&&(byIndex?attr(p,'idx','0')===index:attr(p,'type','obj')===type);});
-        return found.length===1?found[0]:null;
-      };
-      const layoutShape=ph?layouts.map(d=>findPlaceholder(d,true,null,attr(ph,'idx','0'))).filter(Boolean):[];
-      const matchedLayout=layoutShape.length===1?layoutShape[0]:null;
-      const phType=attr(placeholder(matchedLayout),'type',attr(ph,'type','obj'));
-      const masterShape=ph?(findPlaceholder(masterDoc,false,phType,null)??(phType==='ctrTitle'?findPlaceholder(masterDoc,false,'title',null):null)):null;
+      const {ph,matchedLayout,phType,masterShape}=placeholderContext(owner);
       const bodyProperty=(name,fallback)=>attr(body,name)??attr(child(child(matchedLayout,'txBody'),'bodyPr'),name)??attr(child(child(masterShape,'txBody'),'bodyPr'),name)??fallback;
       const paragraphAttribute=(pPr,name,fallback)=>{
         const level=Number(attr(pPr,'lvl','0'));if(!Number.isInteger(level)||level<0||level>8)return attr(pPr,name,fallback);
@@ -390,6 +400,24 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
         const level=Number(attr(pPr,'lvl','0'));if(!Number.isInteger(level)||level<0||level>8)return null;
         const list=child(tx,'lstStyle');
         return child(child(list,`lvl${level+1}pPr`),name)??child(child(list,'defPPr'),name);
+      };
+      const inheritedRunAttribute=(pPr,name)=>{
+        if(!owner)return null;
+        const level=Number(attr(pPr,'lvl','0'));if(!Number.isInteger(level)||level<0||level>8)return null;
+        const fromList=list=>attr(child(child(list,`lvl${level+1}pPr`),'defRPr'),name)??attr(child(child(list,'defPPr'),'defRPr'),name);
+        const fromPlaceholder=sp=>{
+          const text=child(sp,'txBody');if(!text)return null;
+          const first=elements(text).find(n=>n.localName==='p');
+          return fromList(child(text,'lstStyle'))??attr(child(child(first,'pPr'),'defRPr'),name);
+        };
+        const own=fromList(child(tx,'lstStyle'));
+        if(own!==null)return own;
+        if(ph){
+          const styleName=['title','ctrTitle'].includes(phType)?'titleStyle':['body','subTitle','obj'].includes(phType)?'bodyStyle':'otherStyle';
+          const inherited=fromPlaceholder(matchedLayout)??fromPlaceholder(masterShape)??fromList(child(child(masterDoc?.documentElement,'txStyles'),styleName));
+          if(inherited!==null)return inherited;
+        }
+        return fromList(child(presentation.documentElement,'defaultTextStyle'));
       };
       const inheritedSize=(pPr)=>{
         if(!owner)return null;
@@ -511,7 +539,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
       }
       if(num(body,'rot')!==0||attr(body,'vert','horz')!=='horz'||num(body,'numCol',1)!==1||num(body,'rtlCol')!==0||num(body,'fromWordArt')!==0||child(body,'prstTxWarp')&&attr(child(body,'prstTxWarp'),'prst')!=='textNoShape')issue('회전·세로쓰기·다단·워드아트 텍스트는 아직 지원하지 않습니다.',id);
       const runStyle=(rPr,pPr,script='latin')=>{
-        const def=child(pPr,'defRPr'),get=k=>attr(rPr,k,attr(def,k)),kind=script==='latin'?'latin':'ea';
+        const def=child(pPr,'defRPr'),get=k=>attr(rPr,k,attr(def,k,['b','i'].includes(k)?inheritedRunAttribute(pPr,k):null)),kind=script==='latin'?'latin':'ea';
         const baseline=Number(get('baseline')??0);
         if(!Number.isInteger(baseline)||Math.abs(baseline)>100000)issue('지원 범위를 벗어난 위첨자·아래첨자 위치입니다.',id);
         const highlighted=child(rPr,'highlight')??child(def,'highlight');
@@ -520,7 +548,15 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
           highlight=null;
           if(allowPartial)approximate('PPTX_TEXT_HIGHLIGHT_APPROXIMATED','반투명 형광펜 배경 없이 글자를 표시했습니다.');else issue('반투명 글자 형광펜 표시는 아직 지원하지 않습니다.',id);
         }
-        if(![null,'noStrike'].includes(get('strike'))||![null,'none'].includes(get('cap'))||![null,'none','sng'].includes(get('u'))||elements(rPr).some(n=>n.localName==='effectLst'?elements(n).length>0:['effectDag','gradFill','blipFill','uFill','uLn','hlinkClick','hlinkMouseOver'].includes(n.localName)))issue('취소선·대소문자 변환·첨자·효과 등 이 글자 서식은 아직 지원하지 않습니다.',id);
+        for(const [property,allowed,message] of [
+          ['strike',[null,'noStrike'],'글자 취소선 서식은 아직 지원하지 않습니다.'],
+          ['cap',[null,'none'],'글자 대소문자 변환은 아직 지원하지 않습니다.'],
+          ['u',[null,'none','sng'],'이 글자 밑줄 서식은 아직 지원하지 않습니다.']
+        ]){const value=get(property);if(!allowed.includes(value))issue(message,id,'PPTX_TEXT_STYLE_UNSUPPORTED',{property,value});}
+        for(const effect of elements(rPr)){
+          if(effect.localName==='effectLst')for(const item of elements(effect))issue('글자 효과는 아직 지원하지 않습니다.',id,'PPTX_TEXT_STYLE_UNSUPPORTED',{property:'effect',value:item.localName});
+          else if(['effectDag','gradFill','blipFill','uFill','uLn','hlinkClick','hlinkMouseOver'].includes(effect.localName))issue('글자 효과 또는 연결은 아직 지원하지 않습니다.',id,'PPTX_TEXT_STYLE_UNSUPPORTED',{property:'effect',value:effect.localName});
+        }
         const outline=child(rPr,'ln')??child(def,'ln');let textOutline;
         const outlinePaint=child(outline,'solidFill'),paintColors=elements(outlinePaint),paintEffects=elements(paintColors[0]);
         const invisibleOutline=outline&&(outline.hasAttribute('w')&&num(outline,'w')===0||paintColors.length===1&&paintEffects.length===1&&paintEffects[0].localName==='alpha'&&num(paintEffects[0],'val',NaN)===0);
@@ -545,7 +581,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
         }
         const fontReference=child(child(owner,'style'),'fontRef');
         const textColor=textFill?color(textFill,'#000000'):inheritedTextColorEntry?color({childNodes:[inheritedTextColorEntry]},'#000000'):fontReference&&elements(fontReference).length?color(fontReference,'#000000'):'#000000';
-        return {fontFamily:selectedFont??font??'',fontSize:sizePt*4/3,fontWeight:get('b')==='1'?700:400,fontStyle:get('i')==='1'?'italic':'normal',color:textColor,letterSpacing:Number(get('spc')??0)/100*4/3,textDecoration:get('u')&&get('u')!=='none'?'underline':'none',...(disableKerning?{disableKerning:true}:{}),...(baseline&&Number.isInteger(baseline)&&Math.abs(baseline)<=100000?{baseline}:{}),...(textOutline?{outline:textOutline}:{}),...(highlight?{highlight}:{})};
+        return {fontFamily:selectedFont??font??'',fontSize:sizePt*4/3,fontWeight:['1','true'].includes(get('b'))?700:400,fontStyle:['1','true'].includes(get('i'))?'italic':'normal',color:textColor,letterSpacing:Number(get('spc')??0)/100*4/3,textDecoration:get('u')&&get('u')!=='none'?'underline':'none',...(disableKerning?{disableKerning:true}:{}),...(baseline&&Number.isInteger(baseline)&&Math.abs(baseline)<=100000?{baseline}:{}),...(textOutline?{outline:textOutline}:{}),...(highlight?{highlight}:{})};
       };
       const bulletStyle=(p,pPr,characterBullet=false)=>{
         const firstRun=elements(p).find(n=>['r','fld'].includes(n.localName));
@@ -588,7 +624,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
         if((bullet&&!unsupportedBullet||num(pPr,'marL')||num(pPr,'marR')||num(pPr,'indent'))&&!approximatedParagraphs.has(id)){
           diagnostics.push({...diagnostic('PARAGRAPH_SPACING_APPROXIMATED','문단 들여쓰기와 글머리 배치는 근사했습니다.',{slideId:slide.id,nodeId:id},'warning'),reasonKey:'PPTX_PARAGRAPH_INDENT_APPROXIMATED'});approximatedParagraphs.add(id);
         }
-        if(!useParagraphLayout&&['spcBef','spcAft'].some(k=>{const spacing=paragraphOwnSetting(pPr,k);return spacing&&checkedSpacing(spacing).value!==0;}))diagnostics.push(diagnostic('PARAGRAPH_SPACING_APPROXIMATED','문단 앞뒤 간격은 그대로 옮기지 못했습니다.',{slideId:slide.id,nodeId:id},'warning'));
+        if(!useParagraphLayout&&['spcBef','spcAft'].some(k=>{const spacing=paragraphOwnSetting(pPr,k);return spacing&&checkedSpacing(spacing).value!==0;}))approximate('PPTX_PARAGRAPH_SPACING_APPROXIMATED','문단 앞뒤 간격은 그대로 옮기지 못했습니다.');
         if(!paragraphLineHeight(pPr)&&paragraphSetting(pPr,'lnSpc')){
           if(allowPartial)approximate('PPTX_LINE_SPACING_APPROXIMATED','줄 간격 0은 기본 간격으로 표시했습니다.');else issue('줄 간격 0은 아직 지원하지 않습니다.',id);
         }
@@ -656,7 +692,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
           let id=key,suffix=1;while(seen.has(id))id=`${key}-${suffix++}`;seen.add(id);
           activeNodeId=id;
           currentContext={slideId:slide.id,slideNumber:index+1,nodeId:id};
-          objectContexts.set(`${slide.id}:${id}`,{objectName:base,objectType:object.localName==='pic'?'image':object.localName==='grpSp'?'group':object.localName==='graphicFrame'?(all(object,'tbl').length?'table':'chart'):all(object,'t').length?'text':'shape'});
+          objectContexts.set(`${slide.id}:${id}`,{objectName:base,objectIndex:objectCount,objectType:object.localName==='pic'?'image':object.localName==='grpSp'?'group':object.localName==='graphicFrame'?(all(object,'tbl').length?'table':'chart'):all(object,'t').length?'text':'shape'});
           Object.assign(currentContext,objectContexts.get(`${slide.id}:${id}`));
           if(allowPartial&&object.namespaceURI===MC&&object.localName==='AlternateContent'){
             const alternatives=elements(object),choices=alternatives.filter(n=>n.namespaceURI===MC&&n.localName==='Choice'),fallbacks=alternatives.filter(n=>n.namespaceURI===MC&&n.localName==='Fallback');
@@ -669,7 +705,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
               validateMathPng(relation.target);
               const asset=resolveAsset('math-fallback.png',[{path:'math-fallback.png',mime:'image/png',bytes:parts[relation.target]}]);
               if(!model.assets.some(a=>a.id===asset.id))model.assets.push(asset);
-              objectContexts.set(`${slide.id}:${id}`,{objectName:base,objectType:'image'});
+              objectContexts.set(`${slide.id}:${id}`,{...objectContexts.get(`${slide.id}:${id}`),objectType:'image'});
               for(const [fragmentIndex,fragment] of tableFallback.fragments.entries()){
                 let fragmentId=`${id}::math-cell-${fragmentIndex+1}`;while(seen.has(fragmentId))fragmentId+='-';seen.add(fragmentId);
                 const box={x:px(fragment.box.x*map.sx+map.tx),y:px(fragment.box.y*map.sy+map.ty),w:px(fragment.box.w*map.sx),h:px(fragment.box.h*map.sy)};
@@ -698,14 +734,19 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
               if(!fragment){issue('수식 그림의 채우기가 도형 밖에 있어 표시할 수 없습니다.',id);continue;}
               const box={x:px(fragment.box.x*map.sx+map.tx),y:px(fragment.box.y*map.sy+map.ty),w:px(fragment.box.w*map.sx),h:px(fragment.box.h*map.sy)};
               const crop=Object.values(fragment.crop).some(Boolean)?fragment.crop:undefined;
-              objectContexts.set(`${slide.id}:${id}`,{objectName:base,objectType:'image'});
+              objectContexts.set(`${slide.id}:${id}`,{...objectContexts.get(`${slide.id}:${id}`),objectType:'image'});
               slide.nodes.push({id,kind:'image',boxCssPx:box,zOrder:slide.nodes.length,content:{assetId:asset.id,...(crop?{crop}:{})},style:{opacity:1},sourceRef:{slideId:slide.id,elementId:id},parentId});
               diagnostics.push({...diagnostic('PPTX_MATH_IMAGE_FALLBACK','수식은 그림으로 보존되며 수식을 개별 편집할 수 없습니다. 그림 배치는 원본과 다를 수 있습니다.',{slideId:slide.id,nodeId:id},'warning'),slideNumber:index+1,objectName:base,objectType:'image',reasonKey:'PPTX_MATH_IMAGE_FALLBACK'});
               continue;
             }
           }
           if(!['sp','cxnSp','pic','grpSp','graphicFrame'].includes(object.localName)){issue('이 객체는 아직 지원하지 않습니다.',id);continue;}
-          const group=object.localName==='grpSp',pr=child(object,group?'grpSpPr':'spPr'),xfrm=object.localName==='graphicFrame'?child(object,'xfrm'):child(pr,'xfrm');
+          const group=object.localName==='grpSp',pr=child(object,group?'grpSpPr':'spPr');
+          let xfrm=object.localName==='graphicFrame'?child(object,'xfrm'):child(pr,'xfrm');
+          if(!xfrm&&object.localName==='sp'&&layer==='slide'&&!parentId){
+            const inheritedPlaceholder=placeholderContext(object);
+            if(inheritedPlaceholder.ph&&!inheritedPlaceholder.ambiguousLayout)xfrm=child(child(inheritedPlaceholder.matchedLayout,'spPr'),'xfrm')??child(child(inheritedPlaceholder.masterShape,'spPr'),'xfrm');
+          }
           if(!xfrm){issue('마스터에 상속된 객체 위치는 아직 지원하지 않습니다.',id);continue;}
           const position=child(xfrm,'off'),extent=child(xfrm,'ext'),isLine=object.localName==='cxnSp'||attr(child(pr,'prstGeom'),'prst')==='line';
           if(!position||!extent||!['x','y'].every(k=>Number.isFinite(num(position,k,NaN)))||!['cx','cy'].every(k=>Number.isFinite(num(extent,k,NaN))&&num(extent,k)>=0)||!Number.isFinite(num(xfrm,'rot')))throw new Error('객체 좌표·크기·회전값이 잘못되었습니다.');
@@ -729,7 +770,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
               const asset=resolveAsset('shape.svg',[{path:'shape.svg',mime:'image/svg+xml',bytes:Buffer.from(artwork.svg)}]);
               if(!model.assets.some(a=>a.id===asset.id))model.assets.push(asset);
               slide.nodes.push({...node,kind:'image',boxCssPx:artwork.box,content:{assetId:asset.id,editableVector:artwork.vector}});
-              diagnostics.push({...diagnostic('PPTX_SHAPE_IMAGE_APPROXIMATED','HTML에서는 SVG 도형을 편집할 수 있지만, 다시 만든 PPT에서는 그림으로 저장되어 개별 편집할 수 없습니다.',{slideId:slide.id,nodeId:id},'warning'),slideNumber:index+1,...objectContexts.get(`${slide.id}:${id}`),reasonKey:'PPTX_SHAPE_IMAGE_APPROXIMATED'});
+              if(!['ellipse','downArrow','rightArrow'].includes(artwork.vector.shape))diagnostics.push({...diagnostic('PPTX_SHAPE_IMAGE_APPROXIMATED','HTML에서는 SVG 도형을 편집할 수 있지만, 다시 만든 PPT에서는 그림으로 저장되어 개별 편집할 수 없습니다.',{slideId:slide.id,nodeId:id},'warning'),slideNumber:index+1,...objectContexts.get(`${slide.id}:${id}`),reasonKey:'PPTX_SHAPE_IMAGE_APPROXIMATED'});
               continue;
             }
           }
@@ -744,6 +785,13 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
               // Workbook ownership is a validated package fact, independent of
               // whether this chart's visual presentation can be represented.
               if(result.verifiedWorkbookPath){usedCharts.add(chartPath);usedWorkbooks.add(result.verifiedWorkbookPath);}
+              // A structurally linked but invalid workbook remains a blocking
+              // chart error; distinguish it from an actually unrelated package.
+              if(!result.verifiedWorkbookPath&&result.referencedWorkbookPath&&result.diagnostics.some(d=>d.severity==='error'&&d.recoverable!==true))blockedChartWorkbooks.set(chartPath,result.referencedWorkbookPath);
+              // A malformed chart can prevent the externalData id from being
+              // checked. A package relation is evidence to investigate, not
+              // proof that the file is either connected or safe.
+              if(!result.referencedWorkbookPath&&result.diagnostics.some(d=>d.severity==='error'&&d.recoverable!==true))for(const r of relationRecords(chartPath).values())if(r.type===`${R}/package`&&r.target.startsWith('ppt/embeddings/')&&parts[r.target])unverifiedChartTargets.add(r.target);
               diagnostics.push(...result.diagnostics.map(d=>{
                 const blocking=d.severity==='error'&&d.recoverable!==true;
                 const reasonKey=d.reasonKey??(blocking?({CHART_DATA_MISMATCH:'PPTX_CHART_DATA_MISMATCH',INPUT_INVALID:'PPTX_CHART_STRUCTURE_INVALID',LIMIT_EXCEEDED:'PPTX_CHART_LIMIT_EXCEEDED',UNSUPPORTED_OBJECT:'PPTX_CHART_UNSUPPORTED'})[d.code]??'PPTX_CHART_VALIDATION_FAILED':undefined);
@@ -864,14 +912,23 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
             }
             if(!target||!parts[target]){issue('내장 그림 자산이 없습니다.',id);continue;}
             const extension=path.posix.extname(target).toLowerCase(),declaredMime=mimeByExt[extension];if(!declaredMime){issue('이 그림 형식은 지원하지 않습니다.',id);continue;}
-            // Some PowerPoint files label JPEG bytes as PNG (or vice versa).
-            // Normalize only between these two existing raster formats; the
-            // normal asset byte, size, and SVG checks still run below.
-            const bytes=parts[target],raster=['image/png','image/jpeg'].includes(declaredMime);
-            const jpeg=raster&&bytes.length>=3&&bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff;
-            const png=raster&&bytes.length>=8&&[137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v);
-            const mime=jpeg?'image/jpeg':png?'image/png':declaredMime;
-            const assetName='image'+(jpeg?'.jpg':png?'.png':extension);
+            // Some files swap JPEG/PNG labels. PptxGenJS can also write SVG
+            // bytes into the raster fallback while linking the same bytes as
+            // an SVG. Only recover that exact, explicitly linked case; the
+            // regular asset size, MIME and SVG safety checks still apply.
+            const fallbackBytes=parts[target],raster=['image/png','image/jpeg'].includes(declaredMime);
+            const jpeg=raster&&fallbackBytes.length>=3&&fallbackBytes[0]===0xff&&fallbackBytes[1]===0xd8&&fallbackBytes[2]===0xff;
+            const png=raster&&fallbackBytes.length>=8&&[137,80,78,71,13,10,26,10].every((v,i)=>fallbackBytes[i]===v);
+            const vectors=all(blip,'svgBlip'),vector=vectors.length===1?vectors[0]:null,ext=vector?.parentNode,extList=ext?.parentNode;
+            const vectorRelation=vector&&relationRecords(ownerFile).get(attr(vector,'r:embed')),vectorTarget=vectorRelation?.target;
+            const svgFallback=raster&&!jpeg&&!png&&vector?.namespaceURI==='http://schemas.microsoft.com/office/drawing/2016/SVG/main'&&
+              ext?.namespaceURI===A&&ext.localName==='ext'&&attr(ext,'uri')==='{96DAC541-7B7A-43D3-8B79-37D633B846F1}'&&
+              extList?.namespaceURI===A&&extList.localName==='extLst'&&extList.parentNode===blip&&vectorRelation?.type===`${R}/image`&&
+              vectorTarget&&path.posix.extname(vectorTarget).toLowerCase()==='.svg'&&contentTypeFor(vectorTarget)==='image/svg+xml'&&parts[vectorTarget]&&
+              Buffer.from(fallbackBytes).equals(Buffer.from(parts[vectorTarget]));
+            const bytes=svgFallback?parts[vectorTarget]:fallbackBytes;
+            const mime=svgFallback?'image/svg+xml':jpeg?'image/jpeg':png?'image/png':declaredMime;
+            const assetName='image'+(svgFallback?'.svg':jpeg?'.jpg':png?'.png':extension);
             let asset=resolveAsset(assetName,[{path:assetName,mime,bytes}]),duotoneBaked=false;
             if(allowPartial&&mime==='image/png'&&duotones.length===1&&effectsOnBlip.every(n=>n.namespaceURI===A&&['duotone','alphaModFix','extLst'].includes(n.localName))){
               const endpoints=duotoneColors(duotones[0],key=>{
@@ -987,10 +1044,11 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
       visit(tree);
       currentContext={};
     }
+    const blockedWorkbookPaths=new Set(blockedChartWorkbooks.values());
     for(const name of Object.keys(parts)){
-      if(!name.endsWith('/')&&(/(?:^|\/)embeddings\//i.test(name)||contentTypeFor(name)==='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')&&!usedWorkbooks.has(name))throw new Error('현재 차트에 연결되지 않은 내장 문서는 지원하지 않습니다.');
+      if(!name.endsWith('/')&&(/(?:^|\/)embeddings\//i.test(name)||contentTypeFor(name)==='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')&&!usedWorkbooks.has(name)&&!blockedWorkbookPaths.has(name))throw new Error(unverifiedChartTargets.has(name)?'차트 오류로 내장 문서의 연결을 확인하지 못했습니다.':'현재 차트에 연결되지 않은 내장 문서는 지원하지 않습니다.');
     }
-    for(const [owner,records] of relationCache)for(const relation of records.values())if(relation.type===`${R}/package`&&(!usedCharts.has(owner)||!usedWorkbooks.has(relation.target)))throw new Error('검증한 차트 workbook 외의 패키지 관계는 지원하지 않습니다.');
+    for(const [owner,records] of relationCache)for(const relation of records.values())if(relation.type===`${R}/package`&&(!usedCharts.has(owner)||!usedWorkbooks.has(relation.target))&&blockedChartWorkbooks.get(owner)!==relation.target)throw new Error('검증한 차트 workbook 외의 패키지 관계는 지원하지 않습니다.');
     if(selectedFont){
       for(const slide of model.slides){
         const replaceStyle=style=>{if(style&&typeof style.fontFamily==='string')style.fontFamily=selectedFont;};
@@ -1028,11 +1086,13 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
         }
       }
     }
-    for(const d of diagnostics){if(d.slideId&&!d.slideNumber){const index=model.slides.findIndex(s=>s.id===d.slideId);if(index>=0)d.slideNumber=index+1;}if(d.nodeId)Object.assign(d,objectContexts.get(`${d.slideId}:${d.nodeId}`)??{});}
     for(const e of validateModel(model).errors)diagnostics.push({...diagnostic('INPUT_INVALID',`${e.path}: ${e.message}`),reasonKey:'PPTX_MODEL_INVALID',blocking:true});
   }catch(e){
     const code=typeof e.code==='string'&&(/^(FONT_|CHART_)/.test(e.code)||e.code==='LIMIT_EXCEEDED')?e.code:'INPUT_INVALID';
     diagnostics.push({...diagnostic(code,e.message,currentContext),...currentContext,reasonKey:fatalReasons.get(e.message)??(code==='INPUT_INVALID'?'PPTX_PARSE_FATAL':undefined),blocking:true});
   }
+  // Preserve the locations collected before a later fatal package error as
+  // well as those from a successful parse. The model itself remains private.
+  for(const d of diagnostics){if(d.slideId&&!d.slideNumber){const index=model.slides.findIndex(s=>s.id===d.slideId);if(index>=0)d.slideNumber=index+1;}if(d.nodeId)Object.assign(d,objectContexts.get(`${d.slideId}:${d.nodeId}`)??{});}
   return done();
 }
