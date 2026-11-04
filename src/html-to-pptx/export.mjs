@@ -2,6 +2,8 @@ import PptxGenJS from 'pptxgenjs';
 import {diagnostic,validateModel} from './model.mjs';
 import {assetDataUrl,sha256} from './assets.mjs';
 import {groupDiagnostics,applyFlatGroups} from './groups.mjs';
+import {applyTransitions} from './transitions.mjs';
+import {applyNativePresetShapes} from './native-presets.mjs';
 import {canvasSize,EMU_PER_POINT} from './canvas.mjs';
 import {addNativeTable} from './write-table.mjs';
 import {addNativeChart} from './write-chart.mjs';
@@ -171,7 +173,7 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
         if(node.kind==='shape'&&st.assetId)addBackground(st.assetId,box,node.id,node.sourceRef,st.opacity??1);
         if(node.kind==='text'){
           const runOptions=s=>({...resolveTextFont(s,source),fontSize:s.fontSize*pointScale,italic:s.fontStyle==='italic',color:paint(s.color,st.opacity).color,transparency:paint(s.color,st.opacity).transparency,charSpacing:pptCharacterSpacing(s,pointScale),underline:s.textDecoration?.includes('underline')?{style:'sng'}:undefined,...(Number.isInteger(s.baseline)&&s.baseline!==0&&Math.abs(s.baseline)<=100000?{baseline:s.baseline/50}:{}),breakLine:false});
-          let runs=(node.content.runs??[{text:node.content.text,style:st}]).map(r=>{
+          const makeRun=r=>{
             const options=runOptions(r.style),outline=r.style.outline;
             if(outline){
               const color=paint(outline.color,st.opacity??1);
@@ -180,7 +182,13 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
             }
             if(r.style.highlight){const highlight=paint(r.style.highlight);if(highlight.transparency!==0)throw new Error('불투명 단색 외의 글자 형광펜은 지원하지 않습니다.');options.highlight=highlight.color;}
             return {text:r.text,options};
-          });
+          };
+          let runs=node.content.paragraphs?node.content.paragraphs.flatMap((para,index)=>{
+            const items=para.runs.map(makeRun),spacing=parseFloat(para.lineHeight)*(para.lineHeight.endsWith('px')?1:(para.runs[0]?.style.fontSize??st.fontSize))*pointScale;
+            for(const item of items)Object.assign(item.options,{align:para.align,lineSpacing:spacing,paraSpaceBefore:para.beforePx*pointScale,paraSpaceAfter:para.afterPx*pointScale});
+            if(index<node.content.paragraphs.length-1)items.at(-1).options.breakLine=true;
+            return items;
+          }):(node.content.runs??[{text:node.content.text,style:st}]).map(makeRun);
           if(node.content.tableCellGroup){
             const lines=[];for(const run of runs){const segments=run.text.split('\n');for(let i=0;i<segments.length;i++){if(segments[i])lines.push({text:segments[i],options:{...run.options}});if(i<segments.length-1){if(!lines.length)lines.push({text:'',options:{...run.options}});lines.at(-1).options.breakLine=true;}}}runs=lines;
           }
@@ -189,7 +197,8 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
           // label. Preserve a measured single line without enlarging its box or
           // shrinking type. Longer edits may overflow and need a fresh HTML export.
           const layout=measured.measurements.find(m=>m.slideId===source.id).objects.find(o=>o.nodeId===node.id);
-          slide.addText(runs,{...box,...runOptions(st),margin:[padding.top,padding.right,padding.bottom,padding.left].map(v=>v*pointScale),lineSpacing:st.lineHeight!=='normal'&&parseFloat(st.lineHeight)>0?parseFloat(st.lineHeight)*pointScale:undefined,paraSpaceBefore:0,paraSpaceAfter:0,align:st.align??'left',valign:st.valign??'top',fit:'none',wrap:layout.lines.length!==1,isTextBox:true,lang:'ko-KR'});
+          const {bold:defaultBold,italic:defaultItalic,...textDefaults}=runOptions(st);
+          slide.addText(runs,{...box,...textDefaults,margin:[padding.left,padding.right,padding.bottom,padding.top].map(v=>v*pointScale),lineSpacing:st.lineHeight!=='normal'&&parseFloat(st.lineHeight)>0?parseFloat(st.lineHeight)*pointScale:undefined,paraSpaceBefore:0,paraSpaceAfter:0,align:st.align??'left',valign:st.valign??'top',fit:'none',wrap:!['pre','nowrap'].includes(st.whiteSpace)&&layout.lines.length!==1,isTextBox:true,lang:'ko-KR'});
         }else if(node.kind==='shape'){
           const stroke=paint(st.stroke,(st.strokeWidth??0)>0?(st.opacity??1)*(st.strokeOpacity??1):0),half=st.svgGeometry||stroke.transparency===100?0:(st.strokeWidth??0)/2;
           if(b.w<=half*2||b.h<=half*2)throw new Error('Border is wider than the shape');
@@ -210,17 +219,22 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
           }
         }else if(node.kind==='image'){
           const asset=measured.model.assets.find(a=>a.id===node.content.assetId);if(!asset)throw new Error('Picture asset missing');
+          if(node.content.editableVector){
+            const v=node.content.editableVector;
+            slide.addShape(pptx.ShapeType[v.shape],{...box,x:inches(b.x+(b.w-v.width)/2),y:inches(b.y+(b.h-v.height)/2),w:inches(v.width),h:inches(v.height),rotate:v.angle,fill:paint(v.fill==='gradient'?v.gradient.from:v.fill==='none'?'transparent':v.fill,st.opacity),line:{...paint(v.stroke==='none'?'transparent':v.stroke,st.opacity),width:v.strokeWidth*pointScale}});
+          }else{
           const crop=node.content.crop;
           const fullWidth=crop?box.w/(1-(crop.left+crop.right)/100000):box.w,fullHeight=crop?box.h/(1-(crop.top+crop.bottom)/100000):box.h;
           const sizing=crop?{type:'crop',x:fullWidth*crop.left/100000,y:fullHeight*crop.top/100000,w:box.w,h:box.h}:undefined;
           slide.addImage({...box,w:fullWidth,h:fullHeight,sizing,data:assetDataUrl(asset),rounding:node.content.rounding===true,transparency:(1-(st.opacity??1))*100});
           if(asset.mime==='image/svg+xml'&&!node.content.artworkOnly)diagnostics.push(diagnostic('UNSUPPORTED_OBJECT','SVG는 그림 객체입니다. 내부 글자와 경로를 개별 편집할 수 없습니다.',{slideId:source.id,nodeId:node.id,sourceRef:node.sourceRef},'warning'));
+          }
         }
-        objectMap.push({sourceSlideId:source.id,sourceNodeId:node.id,sourceRef:node.sourceRef,pptSlideNumber:index+1,pptObjectId:objectId++,pptObjectName:node.id,support:node.kind==='text'?'native-text':node.kind==='image'?(node.content.artworkOnly?'background-art':'picture'):'native-shape',parentId:node.parentId});
+        objectMap.push({sourceSlideId:source.id,sourceNodeId:node.id,sourceRef:node.sourceRef,pptSlideNumber:index+1,pptObjectId:objectId++,pptObjectName:node.id,support:node.kind==='text'?'native-text':node.kind==='image'?(node.content.editableVector?'native-shape':node.content.artworkOnly?'background-art':'picture'):'native-shape',parentId:node.parentId});
       }
       slide.addNotes('텍스트·도형은 편집 가능한 원생 객체입니다. 화면 1px 품질과 PowerPoint 편집 검증은 별도 관문입니다.');
     }
-    const raw=new Uint8Array(await pptx.write({outputType:'uint8array'}));let pptxBytes=applyFlatGroups(raw,measured.model,objectMap,pointScale);
+    const raw=new Uint8Array(await pptx.write({outputType:'uint8array'}));let pptxBytes=applyTransitions(applyNativePresetShapes(applyFlatGroups(raw,measured.model,objectMap,pointScale),measured.model,objectMap),measured.model);
     if(fontPlan.faces.length){
       try{pptxBytes=embedPptxFonts(pptxBytes,fontPlan.faces,{container:'eot'});}catch(e){issue(e.code??'EXPORT_FAILED','글꼴을 PPT에 포함하지 못했습니다.');return failed();}
       profile.fontEmbedding=fontPlan.report.map(entry=>({...entry,status:'included'}));

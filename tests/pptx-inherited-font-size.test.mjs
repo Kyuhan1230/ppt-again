@@ -39,6 +39,33 @@ test('placeholder uses matching layout then matching master type rather than ano
  edit(parts,'ppt/slideLayouts/slideLayout1.xml',x=>x.replace('sz="1600"',''));
  result=await readPptx(zipSync(parts),{allowPartial:true,fontPolicy:'malgun-gothic'});assert.equal(result.status,'parsed');assert.ok(Math.abs(node(result).style.fontSize-12*4/3)<1e-8);
 });
+test('placeholder text inherits bold and italic from the matching layout but explicit runs override it',async()=>{
+ const parts=await fixture();
+ edit(parts,'ppt/slides/slide1.xml',x=>x.replace(/<p:sp>[\s\S]*?<\/p:sp>/,sp=>sp.replace('<p:nvPr></p:nvPr>','<p:nvPr><p:ph type="title" idx="12"/></p:nvPr>')));
+ const layout='<p:sp><p:nvSpPr><p:cNvPr id="101" name="title"/><p:cNvSpPr/><p:nvPr><p:ph type="title" idx="12"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr><a:defRPr sz="1600" b="1" i="1"/></a:lvl1pPr></a:lstStyle><a:p/></p:txBody></p:sp>';
+ edit(parts,'ppt/slideLayouts/slideLayout1.xml',x=>x.replace('</p:spTree>',layout+'</p:spTree>'));
+ let result=await readPptx(zipSync(parts),{allowPartial:true,fontPolicy:'original'});assert.equal(result.status,'parsed',JSON.stringify(result.diagnostics));
+ let run=node(result).content.runs.find(r=>r.text.includes('Reference'));assert.equal(run.style.fontWeight,700);assert.equal(run.style.fontStyle,'italic');
+ edit(parts,'ppt/slides/slide1.xml',x=>x.replace('<a:rPr ','<a:rPr b="0" i="0" '));
+ result=await readPptx(zipSync(parts),{allowPartial:true,fontPolicy:'original'});assert.equal(result.status,'parsed');
+ run=node(result).content.runs.find(r=>r.text.includes('Reference'));assert.equal(run.style.fontWeight,400);assert.equal(run.style.fontStyle,'normal');
+});
+test('placeholder text inherits bold and italic from the master title style',async()=>{
+ const parts=await fixture();
+ edit(parts,'ppt/slides/slide1.xml',x=>x.replace(/<p:sp>[\s\S]*?<\/p:sp>/,sp=>sp.replace('<p:nvPr></p:nvPr>','<p:nvPr><p:ph type="title" idx="12"/></p:nvPr>')));
+ edit(parts,'ppt/slideMasters/slideMaster1.xml',x=>x.replace(/(<p:titleStyle>[\s\S]*?<a:defRPr) /,'$1 b="1" i="1" '));
+ const result=await readPptx(zipSync(parts),{allowPartial:true,fontPolicy:'original'});assert.equal(result.status,'parsed',JSON.stringify(result.diagnostics));
+ const run=node(result).content.runs.find(r=>r.text.includes('Reference'));assert.equal(run.style.fontWeight,700);assert.equal(run.style.fontStyle,'italic');
+});
+test('ordinary text uses presentation defaults, not master placeholder bold or italic',async()=>{
+ const parts=await fixture();
+ edit(parts,'ppt/slideMasters/slideMaster1.xml',x=>x.replace(/(<p:otherStyle>[\s\S]*?<a:defRPr) /,'$1 b="1" i="1" '));
+ const result=await readPptx(zipSync(parts),{allowPartial:true,fontPolicy:'original'});assert.equal(result.status,'parsed',JSON.stringify(result.diagnostics));
+ const run=node(result).content.runs.find(r=>r.text.includes('Reference'));assert.equal(run.style.fontWeight,400);assert.equal(run.style.fontStyle,'normal');
+ edit(parts,'ppt/presentation.xml',x=>x.replace(/(<p:defaultTextStyle>[\s\S]*?<a:defRPr) /,'$1 b="1" i="1" '));
+ const defaults=await readPptx(zipSync(parts),{allowPartial:true,fontPolicy:'original'});assert.equal(defaults.status,'parsed',JSON.stringify(defaults.diagnostics));
+ const defaultRun=node(defaults).content.runs.find(r=>r.text.includes('Reference'));assert.equal(defaultRun.style.fontWeight,700);assert.equal(defaultRun.style.fontStyle,'italic');
+});
 test('unresolved point size preserves text only in partial mode with an explicit approximation warning',async()=>{
  const parts=await fixture();for(const key of ['ppt/presentation.xml','ppt/slideMasters/slideMaster1.xml']) edit(parts,key,x=>x.replace(/\s+sz="\d+"/g,''));
  const strict=await readPptx(zipSync(parts),{fontPolicy:'malgun-gothic'});assert.equal(strict.status,'failed');

@@ -5,6 +5,9 @@ import {zipSync,unzipSync,strFromU8,strToU8} from 'fflate';
 import {readPptx} from '../src/html-to-pptx/read-pptx.mjs';
 import {exportHtml} from '../src/html-to-pptx/export-html.mjs';
 import {publicDiagnostic} from '../src/html-to-pptx/public-diagnostics.mjs';
+import {readInput} from '../src/html-to-pptx/input.mjs';
+import {measureInput} from '../src/html-to-pptx/measure.mjs';
+import {createBrowserRuntime} from '../src/html-to-pptx/browser-runtime.mjs';
 
 async function fixture(effect='<a:outerShdw blurRad="190500" dist="38100" dir="5400000" algn="t" rotWithShape="0"><a:prstClr val="black"><a:alpha val="40000"/></a:prstClr></a:outerShdw>'){
  const ppt=new PptxGenJS(),slide=ppt.addSlide();slide.background={color:'FFFFFF'};
@@ -29,6 +32,16 @@ test('an unsupported transformed shadow is omitted with an explicit warning',asy
  const effect='<a:outerShdw blurRad="190500" dist="38100" dir="5400000" kx="600000"><a:prstClr val="black"><a:alpha val="40000"/></a:prstClr></a:outerShdw>';
  const result=await readPptx(await fixture(effect),{allowPartial:true});assert.equal(result.status,'parsed');
  assert.ok(result.diagnostics.some(d=>d.reasonKey==='PPTX_SHADOW_OMITTED'));assert.equal(result.model.slides[0].nodes.find(n=>n.id==='step').style.shadow,undefined);
+});
+test('HTML re-export warning identifies loss of the displayed shadow at PPT export',async()=>{
+ const parsed=await readPptx(await fixture(),{allowPartial:true});
+ const html=exportHtml(parsed.model).html,runtime=await createBrowserRuntime({capture:false});
+ try{
+  const measured=await measureInput(await readInput({html}),runtime);
+  const warning=measured.diagnostics.find(d=>d.reasonKey==='HTML_PPTX_SHADOW_OMITTED');
+  assert.ok(warning,JSON.stringify(measured.diagnostics));
+  assert.match(publicDiagnostic(warning).message,/PPT로 다시 저장할 때/);
+ }finally{await runtime.close();}
 });
 test('other shape effects remain explicit placeholders in partial mode',async()=>{
  for(const effect of [

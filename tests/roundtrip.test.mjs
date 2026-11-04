@@ -107,7 +107,8 @@ test('PPT text margins survive the round trip without swapping top and left',asy
   const html=exportHtml(read.model),out=await exportPptx(await measure(html.html));
   assert.equal(out.status,'generated',JSON.stringify(out.diagnostics));
   const actual=(await inspectPptxIndependently(out.pptxBytes)).slides[0].objects[0].bodyPr;
-  assert.deepEqual([actual.tIns,actual.rIns,actual.bIns,actual.lIns],['76200','152400','228600','304800']);
+  const expected=(await inspectPptxIndependently(bytes)).slides[0].objects[0].bodyPr;
+  assert.deepEqual([actual.tIns,actual.rIns,actual.bIns,actual.lIns],[expected.tIns,expected.rIns,expected.bIns,expected.lIns]);
 });
 
 test('unsupported master artwork cannot disappear from a successful reverse conversion',async()=>{

@@ -30,7 +30,8 @@ test('gradient arrows retain two editable vector endpoints and survive HTML rein
  const input=await readInput({html:out.html});assert.ok(!input.diagnostics.some(d=>d.severity==='error'),JSON.stringify(input.diagnostics));
  const runtime=await createBrowserRuntime({capture:false});try{
   const measured=await measureInput(input,runtime);assert.ok(!measured.diagnostics.some(d=>d.severity==='error'),JSON.stringify(measured.diagnostics));
-  assert.equal(measured.diagnostics.filter(d=>d.code==='PPTX_SHAPE_IMAGE_APPROXIMATED').length,2);
+  assert.equal(measured.diagnostics.filter(d=>d.code==='PPTX_SHAPE_IMAGE_APPROXIMATED').length,0);
+  assert.equal(measured.model.slides[0].nodes.filter(n=>n.content.editableVector).length,2);
  }finally{await runtime.close();}
 });
 test('unsupported gradient angles and external SVG references are rejected',async()=>{
@@ -40,4 +41,14 @@ test('unsupported gradient angles and external SVG references are rejected',asyn
  const out=exportHtml(parsed.model);assert.equal(out.status,'generated');
  const tampered=out.html.replace(/fill="url\(#[^)]+\)"/,'fill="url(https://example.invalid/gradient)"');assert.notEqual(tampered,out.html);
  assert.ok((await readInput({html:tampered})).diagnostics.some(d=>d.code==='INPUT_INVALID'));
+});
+
+test('gradient artwork exported to PowerPoint preserves the lighter linear-RGB midpoint',async()=>{
+ const parsed=await readPptx(zipSync(await fixture()),{allowPartial:true});const html=exportHtml(parsed.model).html.replaceAll(/ data-pptx-vector="[^"]*"/g,'');
+ const runtime=await createBrowserRuntime({capture:false});try{
+  const measured=await measureInput(await readInput({html}),runtime);
+  const {exportPptx}=await import('../src/html-to-pptx/export.mjs');const out=await exportPptx(measured);assert.equal(out.status,'generated',JSON.stringify(out.diagnostics));
+  const parts=unzipSync(out.pptxBytes);const svgs=Object.entries(parts).filter(([name])=>/^ppt\/media\/.*\.svg$/.test(name)).map(([,bytes])=>strFromU8(bytes));
+  assert.ok(svgs.some(svg=>/offset="0\.5"[^>]*stop-color="#bc508c"/i.test(svg)),svgs.join('\n'));
+ }finally{await runtime.close();}
 });

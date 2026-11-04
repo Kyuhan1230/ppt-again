@@ -136,7 +136,7 @@ export function exportHtml(model){
           const asset=assets.get(node.content.assetId);if(!asset.mime.startsWith('image/'))throw new Error('그림에는 그림 자산만 사용할 수 있습니다.');
           if(node.content.editableVector){
             const vector=presetVectorMarkup(node.content.editableVector);
-            tag='svg';extra=` xmlns="http://www.w3.org/2000/svg" data-preset-vector="" viewBox="0 0 ${number(vector.width)} ${number(vector.height)}"`;body=vector.body;style+='display:block;';
+            tag='svg';extra=` xmlns="http://www.w3.org/2000/svg" data-preset-vector="" data-pptx-vector="${esc(JSON.stringify(node.content.editableVector))}" viewBox="0 0 ${number(vector.width)} ${number(vector.height)}"`;body=vector.body;style+='display:block;';
           }else{
             tag='img';extra=` alt="" src="${esc(assetDataUrl(asset))}"${node.content.duotoneBaked?' data-duotone-baked=""':''}${node.content.snippedTextBackground?' data-snip-background=""':''}`;style+='display:block;';
             if(node.content.rounding){extra+=' data-pptx-rounded-image=""';style+='border-radius:50%;';}
@@ -148,7 +148,7 @@ export function exportHtml(model){
         return `<${tag} data-source-id="${esc(node.id)}" data-kind="${node.kind}"${node.parentId?` data-parent-id="${esc(node.parentId)}"`:''}${extra} style="${esc(style)}">${tag==='img'?'':body+`</${tag}>`}`;
       }).join('\n');
       const w=number(slide.widthCssPx),h=number(slide.heightCssPx);
-      return `<div class="slide-view" style="max-width:${w}px;aspect-ratio:${w}/${h}"><section data-slide data-slide-id="${esc(slide.id)}" data-ppt-width-emu="${size.width}" data-ppt-height-emu="${size.height}"${slide.animationOmitted?' data-animation-omitted=""':''} style="position:relative;width:${w}px;height:${h}px;background:${esc(slide.background?.color??'#fff')};transform:scale(min(1,calc((100vw - 32px)/${w}px)));transform-origin:0 0;overflow:hidden">${markup}</section></div>`;
+      return `<div class="slide-view" style="max-width:${w}px;aspect-ratio:${w}/${h}"><section data-slide data-slide-id="${esc(slide.id)}" data-ppt-width-emu="${size.width}" data-ppt-height-emu="${size.height}"${slide.animationOmitted?' data-animation-omitted=""':''}${slide.transition?` data-pptx-transition="${esc(JSON.stringify(slide.transition))}"`:''} style="position:relative;width:${w}px;height:${h}px;background:${esc(slide.background?.color??'#fff')};transform:scale(min(1,calc((100vw - 32px)/${w}px)));transform-origin:0 0;overflow:hidden">${markup}</section></div>`;
     }).join('\n');
     const missing=model.slides.flatMap((slide,index)=>slide.nodes.filter(node=>node.content.placeholderDescription).map(node=>({slide:index+1,description:node.content.placeholderDescription})));
     const missingSummary=missing.length?`<details data-placeholder-summary style="max-width:60rem;margin:1rem auto;padding:1rem;background:#fff;color:#7f1d1d"><summary>변환하지 못한 항목 ${missing.length}개 확인</summary><ol>${missing.map(item=>`<li>${item.slide}번 장표: ${esc(item.description)}</li>`).join('')}</ol></details>`:'';

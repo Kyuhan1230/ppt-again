@@ -20,24 +20,20 @@ async function fixture(){
   return zipSync(parts);
 }
 
-test('partial import preserves rotated ellipses and default arrows as warned, reimportable artwork',async()=>{
+test('partial import returns rotated ellipses and arrows as editable native shapes',async()=>{
   const bytes=await fixture();assert.equal((await readPptx(bytes)).status,'failed');
   const result=await readPptx(bytes,{allowPartial:true});assert.equal(result.status,'parsed',JSON.stringify(result.diagnostics));
   for(const id of ['rotated-ellipse','rotated-arrow']){
     const node=result.model.slides[0].nodes.find(n=>n.id===id);assert.equal(node?.kind,'image',id);
     assert.equal(result.model.assets.find(a=>a.id===node.content.assetId)?.mime,'image/svg+xml');
-    const warning=result.diagnostics.find(d=>d.code==='PPTX_SHAPE_IMAGE_APPROXIMATED'&&d.nodeId===id&&d.severity==='warning');assert.ok(warning);
-    const publicWarning=publicDiagnostic(warning,result.model.slides);
-    assert.equal(publicWarning.code,'PPTX_SHAPE_IMAGE_APPROXIMATED');
-    assert.equal(publicWarning.reasonKey,'PPTX_SHAPE_IMAGE_APPROXIMATED');
-    assert.match(publicWarning.message,/그림.*개별 편집/);
+    assert.ok(!result.diagnostics.some(d=>d.code==='PPTX_SHAPE_IMAGE_APPROXIMATED'&&d.nodeId===id));
     assert.equal(result.diagnostics.some(d=>d.code==='PPTX_OBJECT_PLACEHOLDER'&&d.objectName===id),false);
   }
   const out=exportHtml(result.model);assert.equal(out.status,'generated',JSON.stringify(out.diagnostics));
   const rt=await createBrowserRuntime({capture:false});try{
     const measured=await measureInput(await readInput({html:out.html}),rt);
     const pptx=await exportPptx(measured);assert.equal(pptx.status,'generated',JSON.stringify(pptx.diagnostics));
-    assert.ok(pptx.diagnostics.some(d=>d.severity==='warning'&&d.code==='UNSUPPORTED_OBJECT'));
+    assert.equal(pptx.objectMap.filter(d=>d.support==='native-shape').length,2);
   }finally{await rt.close();}
 });
 

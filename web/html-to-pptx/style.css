@@ -19,3 +19,24 @@ body[data-phase=idle] main{max-width:760px;padding-top:62px}body[data-phase=idle
 #preview-image-wrap{position:relative;display:inline-flex;max-width:100%;flex:0 1 auto;line-height:0}#problem-overlay{position:absolute;border:2px solid #d95d30;background:#f28b4729;box-shadow:0 0 0 1px #fff9;pointer-events:none;z-index:2}#problem-location-note{margin:10px 0 0;color:var(--warning);font-size:12px;line-height:1.6}
 
 .diagnostic-raw>details>ul{max-height:320px;overflow-y:auto;overscroll-behavior:contain;margin:0;padding:12px 18px 16px 34px;font-size:12px}.diagnostic-raw>details>ul>li{margin-bottom:12px}
+
+/* The short status stays visible while detailed diagnostics are collapsed. */
+.workspace{align-items:stretch}
+.font-label-row{display:flex;align-items:center;justify-content:space-between;gap:6px;margin:12px 0 7px;font-size:14px;font-weight:600}
+.check-row{display:flex;align-items:center;gap:6px;margin-top:18px}
+.check-row .check-option{display:flex;align-items:flex-start;gap:9px;margin:0;font-weight:500;flex:1;min-width:0}
+.hint-wrap{position:relative;display:inline-flex;flex:none}
+.hint-button{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;min-height:0;padding:0;border:1px solid #a6bbc8;border-radius:50%;background:#fff;color:#506b7a;font-size:12px;line-height:1}
+.hint-button:hover:not(:disabled){background:var(--accent-soft)}
+.hint-tooltip{position:absolute;z-index:4;right:0;top:calc(100% + 6px);width:max-content;max-width:220px;padding:8px 10px;border-radius:6px;background:#243e4e;color:#fff;font-size:12px;line-height:1.5;box-shadow:0 3px 12px #20394b33;visibility:hidden;opacity:0}
+.hint-tooltip::before{content:'';position:absolute;left:0;right:0;bottom:100%;height:6px}
+.font-label-row .hint-tooltip{top:auto;bottom:calc(100% + 6px)}
+.font-label-row .hint-tooltip::before{top:100%;bottom:auto}
+.hint-wrap:not([data-dismissed]):hover .hint-tooltip,.hint-wrap:not([data-dismissed]) .hint-button:focus+.hint-tooltip{visibility:visible;opacity:1}
+#diagnostics>summary{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:0;padding:0;list-style:none}
+#diagnostics>summary::-webkit-details-marker{display:none}
+#diagnostics>summary::before{content:'▸';color:#7b8c97;font-size:12px}
+#diagnostics[open]>summary::before{content:'▾'}
+#diagnostic-heading{font-size:16px;font-weight:700;line-height:1.4}
+#diagnostic-summary{font-size:12px;color:var(--muted);margin:0}
+#diagnostic-list{margin-top:14px}

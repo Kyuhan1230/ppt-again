@@ -89,6 +89,6 @@ test('empty paragraphs retain their line and spacing without adding text on HTML
   const measured=await measureInput(await readInput({html}),runtime);
   assert.equal(measured.diagnostics.filter(d=>d.severity==='error').length,0,JSON.stringify(measured.diagnostics));
   assert.equal(measured.model.slides[0].nodes.find(n=>n.id==='paragraphs').content.text,'First\n\nThird');
-  assert.ok(measured.diagnostics.some(d=>d.code==='PARAGRAPH_SPACING_APPROXIMATED'));
+  assert.ok(measured.diagnostics.some(d=>d.code==='PARAGRAPH_SPACING_APPROXIMATED'&&d.reasonKey==='HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED'));
  }finally{await runtime.close();}
 });
