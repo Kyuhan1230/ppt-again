@@ -151,12 +151,12 @@ function themeBackground(ref,theme,master,overrides){
   return resolve(elements(fill)[0],resolve(colors[0]));
 }
 
-// Strict subset reader. No Office process, document code, network or disk extraction.
-export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}={}){
+// The optional renderer is called only after package and chart-data validation.
+export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}={}, {renderChartImages}={}){
   const selectedFont=({'malgun-gothic':'Malgun Gothic',pretendard:'Pretendard'})[fontPolicy];
   const objectContexts=new Map();
   let currentContext={};
-  const diagnostics=[],model={version:1,sourceDigest:sha256(bytes??''),slides:[],assets:[]};
+  const diagnostics=[],pendingChartImages=[],model={version:1,sourceDigest:sha256(bytes??''),slides:[],assets:[]};
   const fail=(code,message,slideId=null,nodeId=null)=>diagnostics.push(diagnostic(code,message,{slideId,nodeId}));
   const done=()=>{const failed=diagnostics.some(d=>d.severity==='error');return {status:failed?'failed':'parsed',model:failed?null:model,diagnostics};};
   const fatalReasons=new Map([
@@ -194,7 +194,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
         const id=attr(r,'Id');if(r.namespaceURI!==REL||!id||map.has(id))throw new Error('PPTX 관계 ID 또는 네임스페이스가 잘못되었습니다.');
         if(r.localName!=='Relationship'||!['Internal',null].includes(attr(r,'TargetMode')))throw new Error('외부 참조가 있는 PPTX는 지원하지 않습니다.');
         const target=attr(r,'Target','');
-        if(!target||/^[a-z][a-z\d+.-]*:|\\|[\u0000-\u001f?#]/i.test(target))throw new Error('외부 PPTX 경로입니다.');
+        if(!target||/^\/\/|^[a-z][a-z\d+.-]*:|\\|[\u0000-\u001f?#]|%(?:2f|5c|3a|2e|00)/i.test(target))throw new Error('외부 PPTX 경로입니다.');
         const resolved=target.startsWith('/')?target.slice(1):path.posix.normalize(path.posix.join(path.posix.dirname(file),target));
         if(resolved.startsWith('../'))throw new Error('PPTX 경로가 범위를 벗어났습니다.');
         map.set(id,{target:resolved,type:attr(r,'Type')});
@@ -780,7 +780,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
               const refs=elements(data),chart=refs[0],rid=chart?.getAttributeNS(R,'id'),relation=relationRecords(ownerFile).get(rid);
               if(graphic.namespaceURI!==A||data.namespaceURI!==A||refs.length!==1||chart?.namespaceURI!==C||chart.localName!=='chart'||relation?.type!==`${R}/chart`||!relation.target.startsWith('ppt/charts/')||!parts[relation.target])throw new Error('차트 관계 또는 내장 부분이 잘못되었습니다.');
               const chartPath=relation.target;
-              if(!chartPackages.has(chartPath))chartPackages.set(chartPath,readChartPackage(parts,chartPath,{budget,contentTypeFor,workbooks}));
+              if(!chartPackages.has(chartPath))chartPackages.set(chartPath,readChartPackage(parts,chartPath,{budget,contentTypeFor,workbooks,allowImageFallback:typeof renderChartImages==='function'}));
               const result=chartPackages.get(chartPath);
               // Workbook ownership is a validated package fact, independent of
               // whether this chart's visual presentation can be represented.
@@ -792,6 +792,16 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
               // checked. A package relation is evidence to investigate, not
               // proof that the file is either connected or safe.
               if(!result.referencedWorkbookPath&&result.diagnostics.some(d=>d.severity==='error'&&d.recoverable!==true))for(const r of relationRecords(chartPath).values())if(r.type===`${R}/package`&&r.target.startsWith('ppt/embeddings/')&&parts[r.target])unverifiedChartTargets.add(r.target);
+              if(result.imageFallbackEligible&&typeof renderChartImages==='function'){
+                const shapeId=Number(attr(nv,'id')),matches=all(doc,'cNvPr').filter(item=>Number(attr(item,'id'))===shapeId);
+                if(layer!=='slide'||!Number.isSafeInteger(shapeId)||shapeId<=0||matches.length!==1){
+                  const ambiguous=layer==='slide'&&Number.isSafeInteger(shapeId)&&shapeId>0&&matches.length>1;
+                  diagnostics.push({...diagnostic('UNSUPPORTED_OBJECT','차트의 원본 위치를 안전하게 확인할 수 없어 그림으로 대체하지 못했습니다.',{slideId:slide.id,nodeId:id}),slideNumber:index+1,objectName:base,objectType:'chart',reasonKey:ambiguous?'PPTX_CHART_IMAGE_ID_AMBIGUOUS':'PPTX_CHART_IMAGE_FAILED',blocking:true});
+                }else{
+                  slide.nodes.push(node);pendingChartImages.push({slideNumber:index+1,slideId:slide.id,nodeId:id,shapeId,node,objectName:base});
+                }
+                continue;
+              }
               diagnostics.push(...result.diagnostics.map(d=>{
                 const blocking=d.severity==='error'&&d.recoverable!==true;
                 const reasonKey=d.reasonKey??(blocking?({CHART_DATA_MISMATCH:'PPTX_CHART_DATA_MISMATCH',INPUT_INVALID:'PPTX_CHART_STRUCTURE_INVALID',LIMIT_EXCEEDED:'PPTX_CHART_LIMIT_EXCEEDED',UNSUPPORTED_OBJECT:'PPTX_CHART_UNSUPPORTED'})[d.code]??'PPTX_CHART_VALIDATION_FAILED':undefined);
@@ -1049,6 +1059,26 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
       if(!name.endsWith('/')&&(/(?:^|\/)embeddings\//i.test(name)||contentTypeFor(name)==='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')&&!usedWorkbooks.has(name)&&!blockedWorkbookPaths.has(name))throw new Error(unverifiedChartTargets.has(name)?'차트 오류로 내장 문서의 연결을 확인하지 못했습니다.':'현재 차트에 연결되지 않은 내장 문서는 지원하지 않습니다.');
     }
     for(const [owner,records] of relationCache)for(const relation of records.values())if(relation.type===`${R}/package`&&(!usedCharts.has(owner)||!usedWorkbooks.has(relation.target))&&blockedChartWorkbooks.get(owner)!==relation.target)throw new Error('검증한 차트 workbook 외의 패키지 관계는 지원하지 않습니다.');
+    if(pendingChartImages.length){
+      const blocked=diagnostics.some(d=>d.severity==='error'&&(!allowPartial||d.recoverable!==true));
+      const reportFailure=(item,code)=>{const reasonKey=({POWERPOINT_UNAVAILABLE:'PPTX_CHART_IMAGE_UNAVAILABLE',POWERPOINT_OPEN_FAILED:'PPTX_CHART_IMAGE_OPEN_FAILED',POWERPOINT_SECURITY_FAILED:'PPTX_CHART_IMAGE_SECURITY_FAILED',POWERPOINT_CHART_NOT_FOUND:'PPTX_CHART_IMAGE_NOT_FOUND',CHART_IMAGE_BLOCKED:'PPTX_CHART_IMAGE_BLOCKED',POWERPOINT_TIMEOUT:'PPTX_CHART_IMAGE_TIMEOUT'})[code]??'PPTX_CHART_IMAGE_FAILED';diagnostics.push({...diagnostic('UNSUPPORTED_OBJECT','차트 그림을 추출하지 못했습니다.',{slideId:item.slideId,nodeId:item.nodeId}),slideNumber:item.slideNumber,objectName:item.objectName,objectType:'chart',reasonKey,blocking:true});};
+      try{
+        if(blocked)throw Object.assign(new Error('다른 안전성 또는 구조 오류로 차트 그림 추출을 실행하지 않았습니다.'),{code:'CHART_IMAGE_BLOCKED'});
+        const rendered=await renderChartImages(bytes,pendingChartImages.map(({slideNumber,shapeId})=>({slideNumber,shapeId})));
+        if(!Array.isArray(rendered)||rendered.length!==pendingChartImages.length)throw new Error('차트 그림 추출 결과의 개수가 다릅니다.');
+        for(const item of pendingChartImages){
+          const matches=rendered.filter(r=>r.slideNumber===item.slideNumber&&r.shapeId===item.shapeId);
+          if(matches.length!==1||matches[0].errorCode||!(matches[0].bytes instanceof Uint8Array)){reportFailure(item,matches[0]?.errorCode);continue;}
+          try{validatePngStructure(matches[0].bytes);const asset=resolveAsset('chart.png',[{path:'chart.png',mime:'image/png',bytes:matches[0].bytes}]);
+            if(!model.assets.some(a=>a.id===asset.id))model.assets.push(asset);
+            item.node.kind='image';item.node.content={assetId:asset.id};
+            diagnostics.push({...diagnostic('PPTX_CHART_IMAGE_FALLBACK','원본 차트를 그림으로 보존했습니다. 이 차트는 편집할 수 없습니다.',{slideId:item.slideId,nodeId:item.nodeId},'warning'),slideNumber:item.slideNumber,objectName:item.objectName,objectType:'chart',reasonKey:'PPTX_CHART_IMAGE_FALLBACK'});
+          }catch{reportFailure(item,'POWERPOINT_EXPORT_FAILED');}
+        }
+      }catch(error){
+        for(const item of pendingChartImages)reportFailure(item,error.code);
+      }
+    }
     if(selectedFont){
       for(const slide of model.slides){
         const replaceStyle=style=>{if(style&&typeof style.fontFamily==='string')style.fontFamily=selectedFont;};
