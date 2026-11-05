@@ -1,0 +1,60 @@
+const labels={PPTX_CHART_PRESENTATION_UNSUPPORTED:'차트 스타일·막대 간격',PPTX_CHART_DATA_MISMATCH:'차트 데이터 불일치',PPTX_CHART_STRUCTURE_INVALID:'차트 구조 오류',PPTX_CHART_LIMIT_EXCEEDED:'차트 처리 한도',PPTX_CHART_UNSUPPORTED:'지원 밖 차트 구성',PPTX_CHART_VALIDATION_FAILED:'차트 검증 실패',PPTX_ZERO_SIZE_OBJECT_UNSUPPORTED:'0 크기 객체',PPTX_MODEL_INVALID:'변환 구조 검증',PPTX_EXTERNAL_REFERENCE:'외부 참조',PPTX_INHERITED_TEXT_UNRESOLVED:'상속 텍스트 해석 실패',PPTX_THEME_COLOR_UNSUPPORTED:'테마 색상 해석 실패',PPTX_INHERITED_SHAPE_STYLE_UNSUPPORTED:'상속 도형 서식',PPTX_INVALID_COORDINATES:'잘못된 좌표',PPTX_UNUSED_EMBEDDED_PACKAGE:'사용하지 않는 내장 패키지',PPTX_UNEXPECTED_PACKAGE_RELATIONSHIP:'예상하지 못한 패키지 연결',PPTX_XML_INVALID:'잘못된 XML',PPTX_REQUIRED_PART_MISSING:'필수 문서 구성 누락',PPTX_XML_UNSAFE:'안전하지 않은 XML',PPTX_PARSE_FATAL:'문서 분석 실패',PPTX_ZERO_EXTENT_UNSUPPORTED:'크기가 0인 객체',PPTX_MASTER_ARTWORK_UNSUPPORTED:'마스터 배경·그림',PPTX_THEME_BACKGROUND_UNSUPPORTED:'테마 배경',PPTX_TEXT_STYLE_UNSUPPORTED:'텍스트 서식',PPTX_OBJECT_POSITION_UNSUPPORTED:'상속된 위치·크기',PPTX_OBJECT_ROTATION_UNSUPPORTED:'회전·뒤집기',PPTX_SHAPE_EFFECT_UNSUPPORTED:'도형 효과',PPTX_SHAPE_GRADIENT_UNSUPPORTED:'도형 그라데이션',PPTX_CUSTOM_GEOMETRY_UNSUPPORTED:'자유형 도형',PPTX_GROUP_TRANSFORM_UNSUPPORTED:'그룹 변형',PPTX_IMAGE_UNSUPPORTED:'그림',PPTX_FONT_SELECTED:'글꼴 변경',PPTX_EMBEDDED_FONT_IGNORED:'내장 글꼴 제외',PPTX_TABLE_STYLE_UNSUPPORTED:'표 서식',PPTX_TABLE_STRUCTURE_INVALID:'잘못된 표 구조',PPTX_TABLE_LIMIT_EXCEEDED:'표 처리 한도',PREVIEW_UNAVAILABLE:'미리보기',PARAGRAPH_SPACING_APPROXIMATED:'문단 간격',FONT_PREVIEW_SUBSTITUTED:'미리보기 글꼴',FONT_SUBSTITUTED:'대체 글꼴',PPTX_OBJECT_UNSUPPORTED:'기타 객체'};
+labels.PPTX_GROUP_SCALE_APPROXIMATED='그룹 크기 변환 근사';
+labels.PPTX_SHAPE_IMAGE_APPROXIMATED='회전 도형 그림 변환';
+labels.PPTX_IMAGE_APPEARANCE_APPROXIMATED='사진 마스크·효과';
+labels.PPTX_IMAGE_DUOTONE_BAKED='사진 듀오톤 적용';
+labels.PPTX_MATH_IMAGE_FALLBACK='수식 그림 변환';
+labels.PPTX_CHART_IMAGE_FALLBACK='차트 그림 대체 · 편집 불가';
+labels.PPTX_CHART_IMAGE_UNAVAILABLE='PowerPoint 사용 불가';
+labels.PPTX_CHART_IMAGE_OPEN_FAILED='PowerPoint에서 파일 열기 실패';
+labels.PPTX_CHART_IMAGE_SECURITY_FAILED='PowerPoint 보안 설정 실패';
+labels.PPTX_CHART_IMAGE_FAILED='차트 그림 추출 실패';
+labels.PPTX_CHART_IMAGE_NOT_FOUND='원본 차트 위치 확인 실패';
+labels.PPTX_CHART_IMAGE_ID_AMBIGUOUS='중복된 객체 ID';
+labels.PPTX_CHART_IMAGE_BLOCKED='차트 그림 추출 중단';
+labels.PPTX_CHART_IMAGE_TIMEOUT='차트 그림 추출 시간 초과';
+labels.PPTX_MATH_TABLE_BORDER_OMITTED='수식 표 테두리';
+labels.PPTX_TABLE_STYLE_APPROXIMATED='표 셀 서식';
+labels.PPTX_SHADOW_OMITTED='그림자 생략';
+labels.PPTX_SHADOW_APPROXIMATED='그림자 근사';
+labels.PPTX_ARROWHEAD_OMITTED='화살표 끝 생략';
+labels.PPTX_TABLE_TEXT_COLOR_APPROXIMATED='표 교차 셀 글자색';
+labels.PPTX_INHERITED_SIZE_APPROXIMATED='상속 글자 크기 근사';
+labels.PPTX_EMBEDDED_FONT_LOCAL_ONLY='원본 글꼴 설치 필요';
+labels.PPTX_AUTONUM_APPROXIMATED='자동 번호 근사';
+labels.PPTX_TEXT_TAB_APPROXIMATED='탭 위치 근사';
+labels.PPTX_TEXT_HIGHLIGHT_APPROXIMATED='글자 강조 색';
+labels.PPTX_TEXT_BASELINE_APPROXIMATED='위첨자·아래첨자';
+labels.PPTX_PARAGRAPH_ALIGNMENT_APPROXIMATED='문단 정렬';
+labels.PPTX_PARAGRAPH_INDENT_APPROXIMATED='문단 들여쓰기·글머리표';
+labels.PPTX_PARAGRAPH_SPACING_APPROXIMATED='문단 앞뒤 간격';
+labels.PPTX_EMBEDDED_LINK_UNVERIFIED='내장 문서 연결 확인 실패';
+labels.HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED='PPT 재저장 시 문단 배치';
+labels.HTML_PPTX_SHADOW_OMITTED='PPT 재저장 시 그림자';
+const number=d=>Number.isInteger(d.slideNumber)&&d.slideNumber>0?d.slideNumber:null;
+const objectIndex=d=>Number.isInteger(d.objectIndex)&&d.objectIndex>0?d.objectIndex:null;
+const identity=d=>JSON.stringify([number(d),objectIndex(d),d.objectName??'',d.objectType??'',d.severity,d.blocking===true]);
+const generic=d=>d.reasonKey==='PPTX_OBJECT_UNSUPPORTED';
+export function validBounds(b){return b&&['x','y','w','h'].every(k=>Number.isFinite(b[k]))&&b.x>=0&&b.y>=0&&b.w>0&&b.h>0&&b.x+b.w<=1&&b.y+b.h<=1;}
+export function slideRanges(values){const numbers=[...new Set(values.filter(Number.isInteger))].sort((a,b)=>a-b),parts=[];for(let i=0;i<numbers.length;){let j=i;while(j+1<numbers.length&&numbers[j+1]===numbers[j]+1)j++;parts.push(i===j?String(numbers[i]):`${numbers[i]}–${numbers[j]}`);i=j+1;}return parts.join(', ');}
+export function projectDiagnostics(diagnostics=[]){
+ const raw=Array.isArray(diagnostics)?diagnostics:[],specific=new Set(raw.filter(d=>number(d)&&objectIndex(d)&&d.objectName&&d.reasonKey&&!generic(d)).map(identity));
+ const visible=raw.filter(d=>!(d.blocking!==true&&generic(d)&&number(d)&&objectIndex(d)&&d.objectName&&specific.has(identity(d))));
+ const seen=new Set(),unique=visible.filter(d=>{
+  if(!number(d)||!objectIndex(d))return true;
+  const key=JSON.stringify([number(d),objectIndex(d),d.reasonKey??d.code??'UNKNOWN',d.severity,d.blocking===true,d.reason??d.message??'']);
+  if(seen.has(key))return false;seen.add(key);return true;
+ });
+ const categories=new Map();let anonymousRow=0;
+ for(const d of unique){const reason=d.reasonKey??d.code??'UNKNOWN',severity=d.severity==='error'?'error':'warning',blocking=d.blocking===true,key=JSON.stringify([blocking,severity,reason]);if(!categories.has(key))categories.set(key,{key,reasonKey:reason,severity,blocking,title:labels[reason]??'기타 확인 사항',reason:d.reason??d.message??'세부 내용을 확인하세요.',rows:new Map(),slides:new Set(),count:0});const c=categories.get(key);c.count++;if(number(d))c.slides.add(number(d));const unidentified=!objectIndex(d)&&(d.objectName||d.objectType&&!['background','font'].includes(d.objectType));const rowKey=JSON.stringify([objectIndex(d)?number(d):null,objectIndex(d),unidentified?anonymousRow++:null,d.objectName??'',d.objectType??'',d.fontFamily??'',d.reason??d.message??'']);if(!c.rows.has(rowKey))c.rows.set(rowKey,{...d,slides:new Set(),locations:new Map(),count:0});const row=c.rows.get(rowKey);row.count++;if(number(d)){row.slides.add(number(d));row.locations.set(number(d),validBounds(d.bounds)?d.bounds:null);}}
+ return {raw,total:raw.length,fatalCount:raw.filter(d=>d.blocking===true).length,representationCount:raw.filter(d=>d.blocking!==true&&d.severity==='error').length,errorCount:raw.filter(d=>d.severity==='error').length,warningCount:raw.filter(d=>d.severity!=='error').length,affectedSlides:[...new Set(raw.map(number).filter(Boolean))].sort((a,b)=>a-b),suppressedGeneric:raw.length-visible.length,suppressedDuplicate:visible.length-unique.length,categories:[...categories.values()].sort((a,b)=>Number(b.blocking)-Number(a.blocking)||(a.severity==='error'?-1:1)-(b.severity==='error'?-1:1)||b.count-a.count).map(c=>({...c,slides:[...c.slides].sort((a,b)=>a-b),rows:[...c.rows.values()].map(r=>({...r,locations:[...r.locations].map(([slideNumber,bounds])=>({slideNumber,bounds})),slides:[...r.slides].sort((a,b)=>a-b)}))}))};
+}
+export function renderDiagnostics({document,container,summary,diagnostics,slides=[],onSelectSlide}){
+ const p=projectDiagnostics(diagnostics);container.replaceChildren();
+ summary.textContent=p.total?`${p.fatalCount?'변환 중단 원인 '+p.fatalCount+'건 · ':''}${p.representationCount?'표현 제한 '+p.representationCount+'건 · ':''}확인 사항 ${p.warningCount}건 · ${p.affectedSlides.length}개 장표 · ${p.categories.length}가지 원인${p.suppressedDuplicate?' · 동일 객체 중복 '+p.suppressedDuplicate+'건 묶음':''}`:'';
+ const el=(tag,text,className)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(className)n.className=className;return n;};
+ const slideLinks=(host,numbers,row)=>{const range=slideRanges(numbers);if(!range){host.append(el('span','문서 공통','diagnostic-meta'));return;}host.append(el('span',`${range}번 장표`,'diagnostic-meta'));const available=numbers.filter(n=>slides[n-1]?.previewUrl);if(available.length){const button=el('button',available.length===1?'미리보기에서 확인':'첫 해당 장표 보기','diagnostic-jump');button.type='button';button.addEventListener('click',()=>onSelectSlide?.(available[0]-1,{...row,bounds:row.locations.find(location=>location.slideNumber===available[0])?.bounds??null}));host.append(button);}else host.append(el('span','미리보기 없음','diagnostic-meta'));};
+ for(const c of p.categories){const li=el('li',undefined,'diagnostic-group'),details=el('details'),head=el('summary');head.append(el('span',`${c.blocking?'변환 중단 원인 · ':c.severity==='error'?'표현 제한 · ':''}${c.title}`,'diagnostic-title'),el('span',`${c.count}건 · ${c.slides.length?c.slides.length+'장':'문서 공통'}`,'diagnostic-count'));details.append(head);const content=el('div',undefined,'diagnostic-content');content.append(el('p',c.reason,'diagnostic-reason'));if(c.reasonKey==='PPTX_MASTER_ARTWORK_UNSUPPORTED')content.append(el('p','여러 장표가 같은 마스터를 사용하므로 한 원인으로 묶었습니다.','diagnostic-meta'));let loaded=false;details.addEventListener('toggle',()=>{if(!details.open||loaded)return;loaded=true;const list=el('ul',undefined,'diagnostic-objects');for(const row of c.rows){const item=el('li');item.append(el('strong',row.objectName??(row.objectType==='background'?'배경 / 마스터':'문서 설정')));if(objectIndex(row))item.append(el('span',`분석 객체 ${objectIndex(row)}`,'diagnostic-meta'));if(row.fontFamily)item.append(el('span',row.fontFamily,'diagnostic-meta'));if(row.reason&&row.reason!==c.reason)item.append(el('span',row.reason,'diagnostic-reason'));slideLinks(item,row.slides,row);list.append(item);}content.append(list);});details.append(content);li.append(details);container.append(li);}
+
+ return p;
+}

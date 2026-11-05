@@ -27,7 +27,9 @@ export function addNativeChart(slide,node,{pointScale,resolveFont}){
     catAxisTitle:c.axes.xTitle??'',showCatAxisTitle:!!c.axes.xTitle,catAxisTitleFontFace:face,catAxisTitleFontSize:size,catAxisTitleColor:color,
     valAxisTitle:c.axes.yTitle??'',showValAxisTitle:!!c.axes.yTitle,valAxisTitleFontFace:face,valAxisTitleFontSize:size,valAxisTitleColor:color,
   });
-  if(c.type==='bar')Object.assign(options,{barDir:'col',barGrouping:'clustered',barGapWidthPct:33,barOverlapPct:0});
+  // PptxGenJS applies a falsy default to numeric zero; a numeric string keeps
+  // the valid zero gap intact in the generated chart XML.
+  if(c.type==='bar')Object.assign(options,{barDir:'col',barGrouping:'clustered',barGapWidthPct:c.gapWidth===0?'0':c.gapWidth??33,barOverlapPct:0});
   if(c.type==='line'){
     const marker=Math.round(6*strokeScale);if(marker<2||marker>72)throw new Error('Chart marker size is outside the native format range');
     Object.assign(options,{lineSize:2*strokeScale,lineSmooth:false,lineDataSymbol:'circle',lineDataSymbolSize:marker,lineDataSymbolLineSize:strokeScale});

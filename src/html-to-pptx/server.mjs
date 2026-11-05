@@ -72,9 +72,11 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
           const targetType=sourceType==='html'?'pptx':'html';let input;
           if(sourceType==='pptx'){
             if(body.html!==undefined||body.assets!==undefined||body.slideSelector!==undefined||body.fileName!==undefined&&(typeof body.fileName!=='string'||!/\.pptx$/i.test(body.fileName)))return json(res,400,{error:'PPTX 파일 하나를 선택해 주세요.'});
-            input=decodeBase64(body.pptxBase64,64*1024*1024);
+            const options=body.pptxOptions===undefined?{}:body.pptxOptions;
+            if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(k=>!['fontPolicy','allowPartial'].includes(k))||options.fontPolicy!==undefined&&!['original','malgun-gothic','pretendard'].includes(options.fontPolicy)||options.allowPartial!==undefined&&typeof options.allowPartial!=='boolean')return json(res,400,{error:'PPTX 글꼴과 부분 변환 설정을 확인해 주세요.'});
+            input={bytes:decodeBase64(body.pptxBase64,64*1024*1024),options:{fontPolicy:options.fontPolicy??'original',allowPartial:options.allowPartial??false}};
           }else{
-            if(body.pptxBase64!==undefined)return json(res,400,{error:'HTML과 PPTX를 한 번에 입력할 수 없습니다.'});
+            if(body.pptxBase64!==undefined||body.pptxOptions!==undefined)return json(res,400,{error:'HTML과 PPTX를 한 번에 입력할 수 없습니다.'});
             if(body.assets!==undefined&&!Array.isArray(body.assets))return json(res,400,{error:'자산 목록은 배열이어야 합니다.'});
             const assets=(body.assets??[]).map(a=>({path:a?.path,mime:a?.mime||undefined,bytes:decodeBase64(a?.base64,16*1024*1024)}));
             input={html:body.html,assets,slideSelector:body.slideSelector??null,allowTableOverlay:true};
@@ -143,7 +145,7 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
         const preview=/^\/api\/jobs\/([a-f0-9-]+)\/preview\/(\d+)\.png$/.exec(route);
         if(preview){const j=jobs.get(ownerId,preview[1]);if(!j)return missing(res);const s=j.measured?.model?.slides[Number(preview[2])-1],image=j.measured?.previews.find(p=>p.slideId===s?.id);if(!image)return missing(res);res.writeHead(200,{'content-type':'image/png','cache-control':'no-store','x-content-type-options':'nosniff'});return res.end(Buffer.from(image.bytes));}
         if(jobRoute){const j=jobs.get(ownerId,jobRoute[1]);return j?json(res,200,summarize(j)):missing(res);}
-        const relative={'/':'web/html-to-pptx/index.html','/app.js':'web/html-to-pptx/app.js','/style.css':'web/html-to-pptx/style.css'}[route];
+        const relative={'/':'web/html-to-pptx/index.html','/app.js':'web/html-to-pptx/app.js','/input-policy.js':'web/html-to-pptx/input-policy.js','/diagnostic-view.js':'web/html-to-pptx/diagnostic-view.js','/style.css':'web/html-to-pptx/style.css'}[route];
         if(typeof relative==='string'){
           const file=path.join(root,relative),bytes=await fs.readFile(file);
           res.writeHead(200,{'content-type':mime[path.extname(file)],'x-content-type-options':'nosniff','cache-control':'no-store','Content-Security-Policy':"default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"});return res.end(bytes);

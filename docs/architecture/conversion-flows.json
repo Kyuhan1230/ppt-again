@@ -1,0 +1,28 @@
+{
+ "schema_version":1,
+ "diagram_type":"architecture",
+ "meta":{"title":"PPT, Again? 양방향 변환 흐름", "quality_profile":"showcase", "viewBox":[1080,440]},
+ "components":[
+  {"id":"ppt_input","type":"external","label":"PPTX 입력","sublabel":"파일 · 변환 옵션","pos":[35,80],"size":[190,80]},
+  {"id":"ppt_reader","type":"backend","label":"PPTX 읽기","sublabel":"패키지 · 표 · 차트 분석","pos":[295,80],"size":[190,80]},
+  {"id":"ppt_model","type":"backend","label":"장표 모델","sublabel":"객체 · 자산 · 진단","pos":[555,80],"size":[190,80]},
+  {"id":"html_writer","type":"backend","label":"HTML 생성","sublabel":"HTML · 미리보기 · 진단","pos":[815,80],"size":[190,80]},
+  {"id":"html_input","type":"external","label":"HTML 입력","sublabel":"파일 · 이미지 · 글꼴","pos":[35,280],"size":[190,80]},
+  {"id":"html_measure","type":"backend","label":"HTML 분석 · 측정","sublabel":"파싱 · 브라우저 레이아웃","pos":[295,280],"size":[190,80]},
+  {"id":"html_model","type":"backend","label":"측정된 장표 모델","sublabel":"좌표 · 객체 · 진단","pos":[555,280],"size":[190,80]},
+  {"id":"ppt_writer","type":"backend","label":"PPTX 생성","sublabel":"텍스트 · 표 · 차트","pos":[815,280],"size":[190,80]}
+ ],
+ "connections":[
+  {"from":"ppt_input","to":"ppt_reader","label":"읽기"},
+  {"from":"ppt_reader","to":"ppt_model","label":"구성"},
+  {"from":"ppt_model","to":"html_writer","label":"생성"},
+  {"from":"html_input","to":"html_measure","label":"읽기"},
+  {"from":"html_measure","to":"html_model","label":"측정"},
+  {"from":"html_model","to":"ppt_writer","label":"내보내기"}
+ ],
+ "cards":[
+  {"dot":"cyan","title":"PPTX → HTML","items":["PPTX 객체를 분석하고 HTML로 출력","생성된 HTML의 미리보기를 선택적으로 측정"]},
+  {"dot":"emerald","title":"HTML → PPTX","items":["HTML과 자산을 브라우저에서 측정","지원하는 텍스트·표·차트를 PPT 객체로 생성"]},
+  {"dot":"amber","title":"진단과 범위","items":["각 단계의 제한과 오류를 진단으로 반환","원본과 결과의 완전한 일치를 보장하지 않음"]}
+ ]
+}
