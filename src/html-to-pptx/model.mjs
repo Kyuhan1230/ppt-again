@@ -1,5 +1,5 @@
 import {canvasDiagnostics} from './canvas.mjs';
-import {validateTable} from './tables.mjs';
+import {validateTable,validParagraphBullet,validSourceSpacing,validSourceEnd} from './tables.mjs';
 import {validateChart} from './charts.mjs';
 import {validPresetVector} from './preset-vector.mjs';
 import {validTransition} from './transitions.mjs';
@@ -116,6 +116,9 @@ export function validateModel(value) {
               check(['left','center','right','justify'].includes(para.align),`${pp}.align`,'Invalid paragraph alignment');
               check(Array.isArray(para.runs)&&para.runs.length>0&&para.runs.every(r=>record(r)&&typeof r.text==='string'&&record(r.style)),`${pp}.runs`,'Invalid paragraph text');
               if(Array.isArray(para.runs))check(para.runs.every((r,i)=>r?.marker===undefined||r.marker===true&&i===0),`${pp}.runs`,'Invalid list marker');
+              if(para.bullet!==undefined)check(validParagraphBullet(para.bullet),`${pp}.bullet`,'Invalid paragraph bullet');
+              if(para.sourceSpacing!==undefined)check(validSourceSpacing(para.sourceSpacing),`${pp}.sourceSpacing`,'Invalid source spacing');
+              if(para.sourceEnd!==undefined)check(validSourceEnd(para.sourceEnd),`${pp}.sourceEnd`,'Invalid paragraph end formatting');
             }
             if(paragraphs.every(para=>record(para)&&Array.isArray(para.runs)))check(paragraphs.map(para=>para.runs.map(r=>r?.text??'').join('')).join('\n')===n.content.text,`${np}.content.paragraphs`,'Paragraphs do not match text');
           }

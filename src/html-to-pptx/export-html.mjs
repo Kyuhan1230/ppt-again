@@ -31,7 +31,12 @@ const paragraphMarkup=(paragraphs,baseStyle,explicitSeparators=true)=>paragraphs
   // than Chromium does. Preserve the line box and move its glyphs only for
   // top-aligned text, where native and HTML block heights agree.
   const ratio=Number(p.lineHeight),glyphOffset=explicitSeparators&&(!baseStyle.valign||baseStyle.valign==='top')&&Number.isFinite(ratio)&&ratio>1.2?(ratio-1.2)*paragraphStyle.fontSize/4:0;
-  return `<span data-pptx-paragraph style="${esc(css)}">${runMarkup(p.runs,!uniformBaseline,Math.max(0,-p.indentPx),!explicitSeparators&&p.hangingPunct===true&&p.align==='left',glyphOffset)}${empty&&(last||!explicitSeparators)?'<br data-pptx-empty>':''}${!last&&explicitSeparators?'\n':''}</span>`;
+  const bullet=p.bullet?` data-pptx-bullet-type="${esc(p.bullet.type)}" data-pptx-bullet-level="${p.bullet.level??0}"${p.bullet.type==='char'?` data-pptx-bullet-char="${esc(p.bullet.char)}"`:` data-pptx-bullet-format="${esc(p.bullet.format)}" data-pptx-bullet-start="${p.bullet.start??1}" data-pptx-bullet-restart="${p.bullet.restart===false?0:1}"`}${p.bullet.followTextColor?' data-pptx-bullet-follow-text-color="1"':''}${p.bullet.followTextFont?' data-pptx-bullet-follow-text-font="1"':''}`:'';
+  const marker=p.runs.find(r=>r.marker),bulletSize=p.bullet?.sourceSize?` data-pptx-source-bullet-size="${esc(JSON.stringify({size:p.bullet.sourceSize,markerSize:marker?.style.fontSize??paragraphStyle.fontSize,textSize:paragraphStyle.fontSize}))}"`:'';
+  const fontSize=Math.max(...p.runs.filter(r=>!r.marker).map(r=>r.style.fontSize),paragraphStyle.fontSize);
+  const sourceSpacing=p.sourceSpacing?` data-pptx-source-spacing="${esc(JSON.stringify({values:p.sourceSpacing,fontSize,beforePx:p.beforePx,afterPx:p.afterPx,linePx:parseFloat(p.lineHeight)*(p.lineHeight.endsWith('px')?1:paragraphStyle.fontSize)}))}"`:'';
+  const sourceEnd=p.sourceEnd?` data-pptx-source-end="${esc(JSON.stringify(p.sourceEnd))}"`:'';
+  return `<span data-pptx-paragraph${bullet}${bulletSize}${sourceSpacing}${sourceEnd}${p.hangingPunct===true?' data-pptx-hanging-punctuation="1"':''} style="${esc(css)}">${runMarkup(p.runs,!uniformBaseline,Math.max(0,-p.indentPx),!explicitSeparators&&p.hangingPunct===true&&p.align==='left',glyphOffset)}${empty&&(last||!explicitSeparators)?'<br data-pptx-empty>':''}${!last&&explicitSeparators?'\n':''}</span>`;
 }).join('');
 
 // Current content lives once, in the DOM. Metadata contains only document structure.

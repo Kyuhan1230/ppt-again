@@ -70,6 +70,7 @@ const knownObjectErrors=new Map([
 // forward exception text, selectors, source paths, or an arbitrary message.
 const reasons={
   HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED:'PPT로 다시 저장할 때 문단 들여쓰기·간격·정렬이 일부 달라질 수 있습니다.',
+  HTML_PPTX_BULLET_LAYOUT_APPROXIMATED:'브라우저와 PowerPoint의 글머리 모양·크기·위치가 다를 수 있습니다. PPT에서 확인해 주세요.',
   HTML_PPTX_SHADOW_OMITTED:'HTML에 표시된 바깥 그림자는 PPT로 다시 저장할 때 빠집니다.',
   PPTX_CHART_DATA_MISMATCH:'차트 표시 데이터와 연결된 내장 원자료가 일치하지 않습니다.',
   PPTX_CHART_STRUCTURE_INVALID:'차트 또는 내장 원자료의 구조가 올바르지 않아 검증을 완료하지 못했습니다.',
@@ -352,7 +353,7 @@ export function publicDiagnostic(item,slides=[]){
   if(item.blocking===true&&severity==='error'){result.blocking=true;result.message='변환 중단: '+result.message;}
   if(Object.hasOwn(reasons,item.reasonKey)){
     result.reasonKey=item.reasonKey;result.reason=reasons[item.reasonKey];
-    if(['HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED','HTML_PPTX_SHADOW_OMITTED','PPTX_PARAGRAPH_INDENT_APPROXIMATED','PPTX_PARAGRAPH_SPACING_APPROXIMATED','PPTX_LINE_SPACING_APPROXIMATED','PPTX_TEXT_BASELINE_APPROXIMATED','PPTX_PARAGRAPH_ALIGNMENT_APPROXIMATED','PPTX_INHERITED_SIZE_APPROXIMATED','PPTX_AUTONUM_APPROXIMATED','PPTX_TEXT_TAB_APPROXIMATED','PPTX_TEXT_HIGHLIGHT_APPROXIMATED','PPTX_TABLE_TEXT_COLOR_APPROXIMATED','PPTX_EMBEDDED_FONT_LOCAL_ONLY'].includes(item.reasonKey)&&severity==='warning')result.message=reasons[item.reasonKey];
+    if(['HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED','HTML_PPTX_BULLET_LAYOUT_APPROXIMATED','HTML_PPTX_SHADOW_OMITTED','PPTX_PARAGRAPH_INDENT_APPROXIMATED','PPTX_PARAGRAPH_SPACING_APPROXIMATED','PPTX_LINE_SPACING_APPROXIMATED','PPTX_TEXT_BASELINE_APPROXIMATED','PPTX_PARAGRAPH_ALIGNMENT_APPROXIMATED','PPTX_INHERITED_SIZE_APPROXIMATED','PPTX_AUTONUM_APPROXIMATED','PPTX_TEXT_TAB_APPROXIMATED','PPTX_TEXT_HIGHLIGHT_APPROXIMATED','PPTX_TABLE_TEXT_COLOR_APPROXIMATED','PPTX_EMBEDDED_FONT_LOCAL_ONLY'].includes(item.reasonKey)&&severity==='warning')result.message=reasons[item.reasonKey];
     if(item.blocking===true&&severity==='error'){result.blocking=true;result.message='변환 중단: '+reasons[item.reasonKey];}
     if(item.objectType==='chart'&&severity==='error'&&item.reasonKey.startsWith('PPTX_CHART_')){
       const detail=item.chartDetail,parts=[detail?.element,detail?.attribute,detail?.value];

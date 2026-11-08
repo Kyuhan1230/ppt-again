@@ -35,9 +35,14 @@ test('a highlighted table-cell run keeps its color on a PPT round trip',async()=
   assert.equal(out.status,'generated',JSON.stringify(out.diagnostics));assert.match(strFromU8(unzipSync(out.pptxBytes)['ppt/slides/slide1.xml']),/<a:highlight><a:srgbClr val="FFFF00"\/>/);
  }finally{await runtime.close();}
 });
-test('consecutive Arabic-numbered paragraphs keep their text and numbering in partial import',async()=>{
- const b=await fixture(x=>x.replace(/<a:p>[\s\S]*?<\/a:p>/,p=>{const first=p.replace('<a:buNone/>','').replace('</a:pPr>','<a:buAutoNum type="arabicPeriod" startAt="2"/></a:pPr>'),second=p.replace('>First</a:t>','>Second</a:t>').replace('<a:buNone/>','').replace('</a:pPr>','<a:buAutoNum type="arabicPeriod"/></a:pPr>');return first+second;}));
- const strict=await readPptx(b,{fontPolicy:'malgun-gothic'});assert.equal(strict.status,'failed');const r=await read(b);assert.equal(text(r),'2. First\n3. Second');assert.ok(r.diagnostics.some(d=>d.reasonKey==='PPTX_AUTONUM_APPROXIMATED'));
+test('consecutive Arabic-numbered paragraphs keep their text and native numbering',async()=>{
+ const b=await fixture(x=>x.replace(/<a:p>[\s\S]*?<\/a:p>/,p=>{const first=p.replace('<a:buNone/>','').replace('</a:pPr>','<a:buAutoNum type="arabicPeriod" startAt="2"/></a:pPr>'),second=p.replace('>First</a:t>','>Second</a:t>').replace('<a:buNone/>','').replace('</a:pPr>','<a:buAutoNum type="arabicPeriod" startAt="2"/></a:pPr>');return first+second;}));
+ const r=await readPptx(b,{fontPolicy:'malgun-gothic'});assert.equal(r.status,'parsed',JSON.stringify(r.diagnostics));assert.equal(text(r),'2. First\n3. Second');
+ assert.deepEqual(r.model.slides[0].nodes.find(n=>n.id==='content').content.paragraphs.map(p=>p.bullet.start),[2,3]);
+});
+test('a changed native numbering start begins a new PowerPoint list',async()=>{
+ const b=await fixture(x=>x.replace(/<a:p>[\s\S]*?<\/a:p>/,p=>{const first=p.replace('<a:buNone/>','').replace('</a:pPr>','<a:buAutoNum type="arabicPeriod" startAt="3"/></a:pPr>'),second=p.replace('>First</a:t>','>Second</a:t>').replace('<a:buNone/>','').replace('</a:pPr>','<a:buAutoNum type="arabicPeriod"/></a:pPr>');return first+second;}));
+ const r=await readPptx(b,{fontPolicy:'malgun-gothic'});assert.equal(r.status,'parsed',JSON.stringify(r.diagnostics));assert.equal(text(r),'3. First\n1. Second');
 });
 test('text approximation reasons explain the actual limitation publicly',()=>{
  for(const [reason,word] of [['PPTX_AUTONUM_APPROXIMATED','번호'],['PPTX_TEXT_TAB_APPROXIMATED','탭'],['PPTX_TEXT_HIGHLIGHT_APPROXIMATED','강조']]){

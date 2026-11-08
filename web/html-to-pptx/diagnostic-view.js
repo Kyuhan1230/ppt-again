@@ -30,6 +30,7 @@ labels.PPTX_PARAGRAPH_INDENT_APPROXIMATED='문단 들여쓰기·글머리표';
 labels.PPTX_PARAGRAPH_SPACING_APPROXIMATED='문단 앞뒤 간격';
 labels.PPTX_EMBEDDED_LINK_UNVERIFIED='내장 문서 연결 확인 실패';
 labels.HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED='PPT 재저장 시 문단 배치';
+labels.HTML_PPTX_BULLET_LAYOUT_APPROXIMATED='HTML 글머리 배치';
 labels.HTML_PPTX_SHADOW_OMITTED='PPT 재저장 시 그림자';
 const number=d=>Number.isInteger(d.slideNumber)&&d.slideNumber>0?d.slideNumber:null;
 const objectIndex=d=>Number.isInteger(d.objectIndex)&&d.objectIndex>0?d.objectIndex:null;

@@ -1,4 +1,5 @@
 import {pptCharacterSpacing} from './text-spacing.mjs';
+import {paragraphTextRuns} from './write-paragraphs.mjs';
 
 // PptxGenJS owns the native table XML; measured cell sizes remain explicit.
 export function addNativeTable(slide,node,{pointScale,resolveFont,paint}){
@@ -21,7 +22,11 @@ export function addNativeTable(slide,node,{pointScale,resolveFont,paint}){
       if(color.transparency!==0)throw new Error('반투명 표 테두리는 아직 지원하지 않습니다.');
       return {type:'solid',pt:edge.width*pointScale,color:color.color};
     });
-    const runs=(cell.runs.length?cell.runs:[{text:cell.text,style:s}]).map(r=>({text:r.text,options:textStyle(r.style)}));
+    const runs=cell.paragraphs?cell.paragraphs.flatMap((paragraph,index)=>{
+      const items=paragraphTextRuns(paragraph,r=>({text:r.text,options:textStyle(r.style)}),s);
+      if(index<cell.paragraphs.length-1)items.at(-1).options.breakLine=true;
+      return items;
+    }):(cell.runs.length?cell.runs:[{text:cell.text,style:s}]).map(r=>({text:r.text,options:textStyle(r.style)}));
     rows[cell.row].push({text:runs,options:{...textStyle(s),rowspan:cell.rowSpan,colspan:cell.colSpan,margin,border,fill:paint(s.fill??'transparent'),align:s.align??'left',valign:s.valign==='mid'?'middle':s.valign??'top',lineSpacing:s.lineHeight!=='normal'&&parseFloat(s.lineHeight)>0?parseFloat(s.lineHeight)*pointScale:undefined,paraSpaceBefore:0,paraSpaceAfter:0}});
   }
   slide.addTable(rows,{x:inch(b.x),y:inch(b.y),w:inch(b.w),h:inch(b.h),colW:c.columnWidthsCssPx.map(inch),rowH:c.rowHeightsCssPx.map(inch),autoPage:false,objectName:node.id,margin:0,fontFace:resolveFont(c.cells[0].style).fontFace,fontSize:c.cells[0].style.fontSize*pointScale,lang:'ko-KR',breakLine:false});

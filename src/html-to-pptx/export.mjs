@@ -10,6 +10,7 @@ import {addNativeChart} from './write-chart.mjs';
 import {chartText} from './charts.mjs';
 import {planFontEmbedding,embedPptxFonts} from './font-embedding.mjs';
 import {pptCharacterSpacing} from './text-spacing.mjs';
+import {applyTextParagraphs,paragraphTextRuns} from './write-paragraphs.mjs';
 
 function paint(value,opacity=1){
   if(!value||value==='transparent')return {color:'FFFFFF',transparency:100};
@@ -184,7 +185,7 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
             return {text:r.text,options};
           };
           let runs=node.content.paragraphs?node.content.paragraphs.flatMap((para,index)=>{
-            const items=para.runs.map(makeRun),spacing=parseFloat(para.lineHeight)*(para.lineHeight.endsWith('px')?1:(para.runs[0]?.style.fontSize??st.fontSize))*pointScale;
+            const items=paragraphTextRuns(para,makeRun,st),spacing=parseFloat(para.lineHeight)*(para.lineHeight.endsWith('px')?1:(para.runs.find(r=>!r.marker)?.style.fontSize??st.fontSize))*pointScale;
             for(const item of items)Object.assign(item.options,{align:para.align,lineSpacing:spacing,paraSpaceBefore:para.beforePx*pointScale,paraSpaceAfter:para.afterPx*pointScale});
             if(index<node.content.paragraphs.length-1)items.at(-1).options.breakLine=true;
             return items;
@@ -234,7 +235,7 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
       }
       slide.addNotes('텍스트·도형은 편집 가능한 원생 객체입니다. 화면 1px 품질과 PowerPoint 편집 검증은 별도 관문입니다.');
     }
-    const raw=new Uint8Array(await pptx.write({outputType:'uint8array'}));let pptxBytes=applyTransitions(applyNativePresetShapes(applyFlatGroups(raw,measured.model,objectMap,pointScale),measured.model,objectMap),measured.model);
+    const raw=new Uint8Array(await pptx.write({outputType:'uint8array'}));let pptxBytes=applyTransitions(applyNativePresetShapes(applyFlatGroups(applyTextParagraphs(raw,measured.model,pointScale,paint,resolveTextFont),measured.model,objectMap,pointScale),measured.model,objectMap),measured.model);
     if(fontPlan.faces.length){
       try{pptxBytes=embedPptxFonts(pptxBytes,fontPlan.faces,{container:'eot'});}catch(e){issue(e.code??'EXPORT_FAILED','글꼴을 PPT에 포함하지 못했습니다.');return failed();}
       profile.fontEmbedding=fontPlan.report.map(entry=>({...entry,status:'included'}));

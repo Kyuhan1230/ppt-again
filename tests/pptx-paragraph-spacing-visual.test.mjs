@@ -8,6 +8,7 @@ import {chromium} from 'playwright-core';
 import {readInput} from '../src/html-to-pptx/input.mjs';
 import {measureInput} from '../src/html-to-pptx/measure.mjs';
 import {createBrowserRuntime} from '../src/html-to-pptx/browser-runtime.mjs';
+import {exportPptx} from '../src/html-to-pptx/export.mjs';
 
 async function fixture(firstLast=false){
  const ppt=new PptxGenJS(),slide=ppt.addSlide();slide.background={color:'FFFFFF'};
@@ -89,6 +90,8 @@ test('empty paragraphs retain their line and spacing without adding text on HTML
   const measured=await measureInput(await readInput({html}),runtime);
   assert.equal(measured.diagnostics.filter(d=>d.severity==='error').length,0,JSON.stringify(measured.diagnostics));
   assert.equal(measured.model.slides[0].nodes.find(n=>n.id==='paragraphs').content.text,'First\n\nThird');
-  assert.ok(measured.diagnostics.some(d=>d.code==='PARAGRAPH_SPACING_APPROXIMATED'&&d.reasonKey==='HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED'));
+  const output=await exportPptx(measured);assert.equal(output.status,'generated',JSON.stringify(output.diagnostics));
+  const reread=await readPptx(output.pptxBytes,{allowPartial:true});assert.equal(reread.status,'parsed',JSON.stringify(reread.diagnostics));
+  assert.equal(reread.model.slides[0].nodes.find(n=>n.id==='paragraphs').content.text,'First\n\nThird');
  }finally{await runtime.close();}
 });

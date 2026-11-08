@@ -85,12 +85,13 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
     const hiddenByOpacity=el=>{for(let p=el;p;p=p.parentElement)if(Number(getComputedStyle(p).opacity)===0)return true;return false;};
     const plainStyle=st=>({fontFamily:familyName(st.fontFamily),fontSize:parseFloat(st.fontSize),fontWeight:Number(st.fontWeight)||400,fontStyle:st.fontStyle,...(st.fontKerning==='none'?{disableKerning:true}:{}),color:st.color,align:st.textAlign,lineHeight:st.lineHeight,whiteSpace:st.whiteSpace,
       fill:st.backgroundColor,backgroundImage:st.backgroundImage,stroke:st.borderTopColor,strokeWidth:parseFloat(st.borderTopWidth)||0,borderStyle:st.borderTopStyle,radius:parseFloat(st.borderTopLeftRadius)||0,opacity:Number(st.opacity),padding:{top:parseFloat(st.paddingTop),right:parseFloat(st.paddingRight),bottom:parseFloat(st.paddingBottom),left:parseFloat(st.paddingLeft)}});
-    const textRuns=el=>{
+    const textRuns=(el,ownListOnly=false)=>{
       const runs=[],walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT|NodeFilter.SHOW_ELEMENT);let child;
       while((child=walker.nextNode())){
         if(child.nodeType!==3&&child.tagName!=='BR')continue;
         if(child.tagName==='BR'&&child.hasAttribute('data-pptx-empty'))continue;
         const parent=child.nodeType===3?child.parentElement:child;
+        if(ownListOnly&&parent.closest('li')!==el)continue;
         if(parent.closest('svg'))continue;
         const cs=getComputedStyle(parent);
         if(hiddenByOpacity(parent)||cs.visibility==='hidden'||!parent.getClientRects().length)continue;
@@ -106,7 +107,8 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
         const highlightElement=parent.closest('[data-pptx-highlight]');
         if(highlightElement&&el.contains(highlightElement))style.highlight=getComputedStyle(highlightElement).backgroundColor;
         if(parseFloat(cs.webkitTextStrokeWidth)>0)style.outline={color:cs.webkitTextStrokeColor,width:parseFloat(cs.webkitTextStrokeWidth)};
-        if(text)runs.push({text,style});
+        const marker=parent.closest('[data-pptx-list-marker]');
+        if(text)runs.push({text,style,...(marker&&el.contains(marker)?{marker:true}:{})});
       }
       if(profile!=='project-data-v1'&&!['pre','pre-wrap','break-spaces'].includes(getComputedStyle(el).whiteSpace)){
         for(let i=1;i<runs.length;i++)if(runs[i-1].text.endsWith(' '))runs[i].text=runs[i].text.replace(/^ +/,'');
@@ -114,10 +116,104 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
       }
       return runs.filter(r=>r.text.length);
     };
+    const paragraphFromDom=(element,items,{first,last})=>{
+      const cs=getComputedStyle(element),type=element.dataset.pptxBulletType,marker=items.find(r=>r.marker);
+      let bullet;
+      const hasText=items.some(r=>!r.marker&&r.text.trim());
+      if((marker||!hasText)&&type==='char')bullet={type,char:marker?.text.trim()||element.dataset.pptxBulletChar||'',level:Number(element.dataset.pptxBulletLevel??0)};
+      else if((marker||!hasText)&&type==='number'){
+        const original=Number(element.dataset.pptxBulletStart??1),label=marker?.text.trim().match(/^(\d+)\.$/),edited=label?Number(label[1]):NaN;
+        const changed=marker&&Number.isInteger(original)&&Number.isInteger(edited)&&edited!==original;
+        bullet={type,format:element.dataset.pptxBulletFormat,start:marker&&!label?NaN:changed?edited:original,restart:changed||element.dataset.pptxBulletRestart!=='0',level:Number(element.dataset.pptxBulletLevel??0)};
+      }
+      else if(marker&&!type&&[...marker.text.trim()].length===1)bullet={type:'char',char:marker.text.trim(),level:0};
+      else if(marker&&type)bullet={type,level:Number(element.dataset.pptxBulletLevel??0)};
+      if(bullet){
+        const textStyle=items.find(r=>!r.marker&&r.text.trim())?.style??items.find(r=>!r.marker)?.style;
+        if(element.dataset.pptxBulletFollowTextColor==='1'&&(!marker||marker.style.color===textStyle?.color))bullet.followTextColor=true;
+        if(element.dataset.pptxBulletFollowTextFont==='1'&&(!marker||marker.style.fontFamily===textStyle?.fontFamily))bullet.followTextFont=true;
+      }
+      if(bullet&&element.dataset.pptxSourceBulletSize){try{
+        const original=JSON.parse(element.dataset.pptxSourceBulletSize),textSize=items.find(r=>!r.marker&&r.text.trim())?.style.fontSize??parseFloat(cs.fontSize),markerSize=marker?.style.fontSize??textSize;
+        if(Number.isFinite(original.markerSize)&&Number.isFinite(original.textSize)&&Math.abs(original.markerSize-markerSize)<.05&&Math.abs(original.textSize-textSize)<.05)bullet.sourceSize=original.size;
+      }catch{}}
+      let sourceSpacing;const encoded=element.dataset.pptxSourceSpacing;
+      if(encoded){try{
+        const original=JSON.parse(encoded),currentFont=Math.max(...items.filter(r=>!r.marker).map(r=>r.style.fontSize),parseFloat(cs.fontSize));
+        if(Number.isFinite(original.fontSize)&&Math.abs(original.fontSize-currentFont)<.05&&original.values&&typeof original.values==='object'){
+          const values={};for(const [name,actual,snapshot] of [['lnSpc',parseFloat(cs.lineHeight),original.linePx],['spcBef',parseFloat(cs.paddingTop),original.beforePx],['spcAft',parseFloat(cs.paddingBottom),original.afterPx]]){
+            const value=original.values[name],limit=value?.kind==='spcPct'?13200000:value?.kind==='spcPts'?158400:-1;
+            const hiddenEdgeChanged=snapshot===0&&value?.value>0&&(name==='spcBef'&&!first||name==='spcAft'&&!last);
+            if(!hiddenEdgeChanged&&(value?.kind==='default'&&name==='lnSpc'||Number.isInteger(value?.value)&&value.value>=0&&value.value<=limit)&&Number.isFinite(snapshot)&&Math.abs(actual-snapshot)<.05)values[name]=value;
+          }if(Object.keys(values).length)sourceSpacing=values;
+        }
+      }catch{}}
+      let sourceEnd;if(element.dataset.pptxSourceEnd){try{sourceEnd=JSON.parse(element.dataset.pptxSourceEnd);}catch{sourceEnd={mode:'invalid'};}}
+      return {beforePx:parseFloat(cs.paddingTop),afterPx:parseFloat(cs.paddingBottom),leftPx:parseFloat(cs.paddingLeft),rightPx:parseFloat(cs.paddingRight),indentPx:parseFloat(cs.textIndent),lineHeight:cs.lineHeight,align:({start:'left',end:'right'})[cs.textAlign]??cs.textAlign,runs:items,...(bullet?{bullet}:{}),...(sourceSpacing?{sourceSpacing}:{}),...(sourceEnd?{sourceEnd}:{}),...(element.dataset.pptxHangingPunctuation==='1'?{hangingPunct:true}:{})};
+    };
+    const simpleListBefore=element=>{
+      if(element.tagName!=='LI'||getComputedStyle(element).listStyleType!=='none')return null;
+      const ps=getComputedStyle(element,'::before');let char='';try{char=JSON.parse(ps.content);}catch{}
+      if(typeof char!=='string'||[...char].length!==1||/[\s\u0000-\u001f]/u.test(char)||ps.position!=='absolute'||ps.display!=='block'||!Number.isFinite(parseFloat(ps.left))||ps.transform!=='none'||ps.filter!=='none'||ps.clipPath!=='none'||ps.textShadow!=='none'||Number(ps.opacity)!==1||visibleColor(ps.backgroundColor)||ps.backgroundImage!=='none'||['Top','Right','Bottom','Left'].some(side=>parseFloat(ps[`padding${side}`])!==0||parseFloat(ps[`border${side}Width`])!==0||parseFloat(ps[`margin${side}`])!==0))return null;
+      return {char,style:ps,left:parseFloat(ps.left)};
+    };
+    const measureNativeList=(el,at)=>{
+      const listRect=el.getBoundingClientRect(),symbols={disc:'•',circle:'◦',square:'▪'},listItems=[];let tightLine=false,wrappedLine=false;
+      const collect=(list,level)=>{
+        let number=Number(list.getAttribute('start')??1);
+        if(level>8||list.hasAttribute('reversed')||!Number.isInteger(number)||number<1||number>32767){at('UNSUPPORTED_OBJECT','목록 단계 또는 시작 번호를 변환할 수 없습니다.');return;}
+        for(const [index,item] of [...list.children].entries()){
+          if(item.tagName!=='LI'){at('UNSUPPORTED_OBJECT','목록에는 항목만 넣어 주세요.');continue;}
+          if(item.hasAttribute('value'))number=Number(item.getAttribute('value'));
+          listItems.push({item,level,number,restart:index===0||item.hasAttribute('value')});number++;
+          for(const nested of item.children)if(['UL','OL'].includes(nested.tagName))collect(nested,level+1);
+        }
+      };
+      collect(el,0);
+      const paragraphs=listItems.map(({item,level,number,restart},index)=>{
+        const cs=getComputedStyle(item),custom=simpleListBefore(item),markerStyle=custom?.style??getComputedStyle(item,'::marker'),r=item.getBoundingClientRect();
+        const next=listItems[index+1]?.item.getBoundingClientRect();
+        const left=(r.left-listRect.left)/renderScale+parseFloat(cs.paddingLeft),right=Math.max(0,(listRect.right-r.right)/renderScale+parseFloat(cs.paddingRight));
+        const size=parseFloat(markerStyle.fontSize)||parseFloat(cs.fontSize),type=cs.listStyleType;let markerContent=!custom&&markerStyle.content==='none'?'':null;
+        if(!custom&&!['normal','none'].includes(markerStyle.content)){
+          try{markerContent=JSON.parse(markerStyle.content);}catch{}
+          if(typeof markerContent!=='string'||([...markerContent.trim()].length!==1&&markerContent!==''))at('UNSUPPORTED_OBJECT','이 CSS 글머리 내용은 아직 변환할 수 없습니다.');
+        }
+        const bullet=custom?{type:'char',char:custom.char,level}:markerContent===''?null:typeof markerContent==='string'&&[...markerContent.trim()].length===1?{type:'char',char:markerContent.trim(),level}:type==='none'?null:symbols[type]?{type:'char',char:symbols[type],level}:type==='decimal'?{type:'number',format:'arabicPeriod',start:number,restart,level}:null;
+        if(!bullet&&type!=='none'&&markerContent!=='')at('UNSUPPORTED_OBJECT',`HTML 목록 형식 ${type}은 아직 지원하지 않습니다.`);
+        if(cs.listStylePosition!=='outside'||cs.listStyleImage!=='none')at('UNSUPPORTED_OBJECT','그림·내부 기호를 사용하는 HTML 목록은 아직 지원하지 않습니다.');
+        const items=textRuns(item,true),base=items.find(part=>part.text.trim())?.style??{fontFamily:familyName(cs.fontFamily),fontSize:parseFloat(cs.fontSize),fontWeight:Number(cs.fontWeight)||400,fontStyle:cs.fontStyle,color:cs.color,textDecoration:cs.textDecorationLine,letterSpacing:cs.letterSpacing};
+        if(bullet)items.unshift({text:(bullet.type==='number'?`${number}.`:bullet.char)+' ',style:{...base,fontFamily:familyName(markerStyle.fontFamily)||base.fontFamily,fontSize:size,fontWeight:Number(markerStyle.fontWeight)||base.fontWeight,fontStyle:markerStyle.fontStyle||base.fontStyle,color:markerStyle.color||base.color},marker:true});
+        if(!items.length)items.push({text:'',style:base});
+        const measuredLines=lineMetrics(item,true).lines,lines=measuredLines.length||1,textRight=(r.right-rr.x)/renderScale-parseFloat(cs.paddingRight);
+        if(measuredLines.length>1)wrappedLine=true;
+        if(measuredLines.some(line=>Math.abs(textRight-(line.x+line.w))<.2))tightLine=true;
+        let lineHeight=parseFloat(cs.lineHeight);
+        if(!Number.isFinite(lineHeight)){
+          const probe=document.createElement('span');probe.style.cssText='position:fixed;visibility:hidden;display:block;white-space:pre';
+          for(const key of ['font-family','font-size','font-weight','font-style','line-height'])probe.style.setProperty(key,cs.getPropertyValue(key),'important');
+          probe.textContent='M';document.body.append(probe);lineHeight=probe.getBoundingClientRect().height;probe.remove();
+        }
+        const contentBottom=r.top+(parseFloat(cs.paddingTop)+lineHeight*lines+parseFloat(cs.paddingBottom))*renderScale;
+        const gap=next?(next.top-contentBottom)/renderScale:parseFloat(cs.marginBottom);
+        if(!Number.isFinite(gap)||gap<-.1)at('UNSUPPORTED_OBJECT','겹치는 HTML 목록 항목은 아직 지원하지 않습니다.');
+        let markerAdvance=size*.875;
+        if(bullet&&!custom&&(typeof markerContent==='string'||bullet.type==='number')){
+          const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d');
+          ctx.font=`${markerStyle.fontStyle} ${markerStyle.fontWeight} ${size}px ${markerStyle.fontFamily}`;
+          markerAdvance=ctx.measureText(typeof markerContent==='string'?markerContent:`${number}. `).width;
+        }
+        const indent=custom?(r.left-listRect.left)/renderScale+custom.left+parseFloat(cs.borderLeftWidth)-left:bullet?-markerAdvance:0;
+        return {beforePx:index===0?Math.max(0,(r.top-listRect.top)/renderScale):0,afterPx:Math.max(0,gap),leftPx:left,rightPx:right,indentPx:indent,lineHeight:`${lineHeight}px`,align:({start:'left',end:'right'})[cs.textAlign]??cs.textAlign,runs:items,...(bullet?{bullet}:{})};
+      });
+      const reserve=Math.max(0,...paragraphs.map(p=>p.bullet?-(p.leftPx+p.indentPx):0));
+      return {paragraphs,listRect,reserve,tightLine:tightLine&&!wrappedLine};
+    };
     const measureTable=async(table,box,at)=>{
       const rows=[...table.rows],tableStyle=getComputedStyle(table);
+      const nativeCellList=cell=>cell&&['TD','TH'].includes(cell.tagName)&&cell.children.length===1&&['UL','OL'].includes(cell.firstElementChild.tagName)&&![...cell.childNodes].some(node=>node.nodeType===3&&node.textContent.trim())?cell.firstElementChild:null;
       if(!rows.length||rows.length>100||rows.reduce((n,row)=>n+row.cells.length,0)>2000){at('INPUT_INVALID','표는 100행·50열·2000셀, 문서는 10000셀 이내여야 합니다.');return null;}
-      if(table.querySelector('table')||[...table.querySelectorAll('*')].some(e=>!['THEAD','TBODY','TFOOT','TR','TH','TD','COLGROUP','COL','DIV','SPAN','BR','B','I','STRONG','EM','U','SMALL'].includes(e.tagName))){at('UNSUPPORTED_OBJECT','중첩 표·그림·입력 요소·캡션은 일반 표에 넣을 수 없습니다.');return null;}
+      if(table.querySelector('table')||[...table.querySelectorAll('*')].some(e=>!['THEAD','TBODY','TFOOT','TR','TH','TD','COLGROUP','COL','DIV','SPAN','BR','B','I','STRONG','EM','U','SMALL','UL','OL','LI'].includes(e.tagName)||['UL','OL','LI'].includes(e.tagName)&&!nativeCellList(e.closest('td,th'))?.contains(e))){at('UNSUPPORTED_OBJECT','중첩 표·그림·입력 요소·캡션은 일반 표에 넣을 수 없습니다.');return null;}
       if(!['table','inline-table'].includes(tableStyle.display)||tableStyle.direction!=='ltr'||tableStyle.emptyCells!=='show'||tableStyle.borderCollapse!=='collapse'&&tableStyle.borderSpacing.split(' ').some(v=>parseFloat(v)!==0)){at('UNSUPPORTED_OBJECT','표의 방향·빈 셀 숨김·셀 사이 간격은 아직 지원하지 않습니다.');return null;}
       const sides=['Top','Right','Bottom','Left'];
       const ruledRows=rows.filter(row=>sides.some(side=>parseFloat(getComputedStyle(row)[`border${side}Width`])>0));
@@ -149,6 +245,7 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
         const paragraphPeriod=generated&&element.hasAttribute('data-pptx-hanging-punct')&&element.textContent==='.'&&element.parentElement?.parentElement===paragraph&&paragraph.parentElement===cell&&paragraph.lastChild===element.parentElement&&element.parentElement.lastChild===element;
         const relativeCell=['TD','TH'].includes(element.tagName)&&cs.position==='relative'&&['top','right','bottom','left'].every(side=>cs[side]==='auto'||parseFloat(cs[side])===0);
         if(cs.display==='none'||cs.visibility!=='visible'||hiddenByOpacity(element)||cs.transform!=='none'||cs.filter!=='none'||cs.clipPath!=='none'||cs.perspective!=='none'||cs.animationName!=='none'||cs.writingMode!=='horizontal-tb'||cs.direction!=='ltr'||Number(cs.opacity)!==1||cs.backgroundImage!=='none'||cs.boxShadow!=='none'||cs.textShadow!=='none'||['hidden','clip','scroll','auto'].includes(cs.overflowX)||['hidden','clip','scroll','auto'].includes(cs.overflowY)||element!==table&&cs.position!=='static'&&!relativeCell)at('UNSUPPORTED_OBJECT','표 안의 숨김·변환·이미지 배경·효과는 아직 지원하지 않습니다.');
+        if(['UL','OL','LI'].includes(element.tagName)&&(visibleColor(cs.backgroundColor)||element.tagName==='LI'&&cs.display!=='list-item'||element.tagName!=='LI'&&cs.display!=='block'))at('UNSUPPORTED_OBJECT','표 목록의 별도 배경이나 배치는 아직 지원하지 않습니다.');
         if(element.tagName==='DIV'){
           const cell=element.parentElement,cellStyle=getComputedStyle(cell);
           const range=document.createRange();range.selectNodeContents(element);
@@ -195,12 +292,26 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
           const cs=getComputedStyle(cell),bounds=boxOf(cell);
           const end=rowBoxes[row+rowSpan-1];
           if(cs.display!=='table-cell'||Math.abs(bounds.y-rowBoxes[row].y)>.05||Math.abs(bounds.y+bounds.h-end.y-end.h)>.05){at('UNSUPPORTED_OBJECT','표의 셀 경계를 하나의 격자로 확정할 수 없습니다.');return null;}
-          const style=plainStyle(cs),generatedParagraphs=generatedCellParagraphs(cell);
-          const paragraphs=generatedParagraphs?[...cell.children].map(e=>{
+          const style=plainStyle(cs),generatedParagraphs=generatedCellParagraphs(cell),list=nativeCellList(cell);
+          const listMeasure=list?measureNativeList(list,at):null;
+          if(listMeasure){
+            const cellRect=cell.getBoundingClientRect(),listRect=listMeasure.listRect;
+            const left=(listRect.left-cellRect.left)/renderScale-parseFloat(cs.paddingLeft)-parseFloat(cs.borderLeftWidth)/2;
+            const right=(cellRect.right-listRect.right)/renderScale-parseFloat(cs.paddingRight)-parseFloat(cs.borderRightWidth)/2;
+            const top=(listRect.top-cellRect.top)/renderScale-parseFloat(cs.paddingTop)-parseFloat(cs.borderTopWidth)/2;
+            if([left,right,top].some(value=>value<-.1))at('UNSUPPORTED_OBJECT','표 셀 밖으로 벗어난 목록은 아직 지원하지 않습니다.');
+            for(const paragraph of listMeasure.paragraphs){paragraph.leftPx+=Math.max(0,left);paragraph.rightPx+=Math.max(0,right);}
+            if(listMeasure.paragraphs.length)listMeasure.paragraphs[0].beforePx+=Math.max(0,top);
+            const reserve=Math.max(0,...listMeasure.paragraphs.map(p=>p.bullet?-(p.leftPx+p.indentPx):0));
+            if(reserve>style.padding.left+.1)at('UNSUPPORTED_OBJECT','표 셀의 글머리 위치를 표시할 여백이 부족합니다.');
+            else if(reserve>0){style.padding.left-=reserve;for(const p of listMeasure.paragraphs)p.leftPx+=reserve;}
+          }
+          const paragraphs=generatedParagraphs?[...cell.children].map((e,index,all)=>{
             const parts=textRuns(e),placeholder=e.lastElementChild;let value=e.innerText;
             if(placeholder?.tagName==='BR'&&placeholder.hasAttribute('data-pptx-empty')&&value.endsWith('\n'))value=value.slice(0,-1);
-            return {element:e,parts,text:value};
-          }):null;
+            const items=parts.length?parts:[{text:'',style:plainStyle(getComputedStyle(e))}];
+            return {element:e,parts,text:value,format:paragraphFromDom(e,items,{first:index===0,last:index===all.length-1})};
+          }):listMeasure?listMeasure.paragraphs.map(format=>({element:list,parts:format.runs,text:format.runs.map(part=>part.text).join(''),format})):null;
           const runs=paragraphs?paragraphs.flatMap(({element,parts},i)=>{const separator={text:'\n',style:parts[0]?.style??plainStyle(getComputedStyle(element))};return i?[separator,...parts]:parts;}):simpleCellBlocks(cell)?[...cell.children].flatMap((e,i)=>{const parts=textRuns(e);return i&&parts.length?[{text:'\n',style:parts[0].style},...parts]:parts;}):textRuns(cell);
           const text=paragraphs?paragraphs.map(p=>p.text).join('\n'):cell.innerText;
           if(generatedParagraphs&&!diagnostics.some(d=>d.code==='PARAGRAPH_SPACING_APPROXIMATED'&&d.slideId===id&&d.nodeId===table.dataset.sourceId))diagnostics.push({code:'PARAGRAPH_SPACING_APPROXIMATED',reasonKey:'HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED',severity:'warning',slideId:id,nodeId:table.dataset.sourceId,sourceRef:{slideId:id,elementId:table.dataset.sourceId},message:'표 문단의 들여쓰기와 간격은 PPT로 다시 저장할 때 일부 달라질 수 있습니다.'});
@@ -210,7 +321,7 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
             if(!Number.isFinite(inset)||inset<0||inset>borderWidth/2){at('INPUT_INVALID','표 셀의 테두리 보정 값이 잘못되었습니다.');continue;}
             style.padding[side]+=inset;
           }
-          if(['normal','nowrap'].includes(cs.whiteSpace)&&[...cell.querySelectorAll('*')].every(e=>['normal','nowrap'].includes(getComputedStyle(e).whiteSpace))){
+          if(!list&&['normal','nowrap'].includes(cs.whiteSpace)&&[...cell.querySelectorAll('*')].every(e=>['normal','nowrap'].includes(getComputedStyle(e).whiteSpace))){
             for(let i=0;i<runs.length;i++)if(runs[i].text==='\n'){
               if(i>0)runs[i-1].text=runs[i-1].text.replace(/ +$/,'');
               if(i+1<runs.length)runs[i+1].text=runs[i+1].text.replace(/^ +/,'');
@@ -243,15 +354,15 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
             style.borders[name]={color,width,style:width?'solid':'none'};
           }
           for(const family of new Set([style.fontFamily,...runs.map(r=>r.style.fontFamily)]))if(!await fontAvailable(family))at('FONT_UNAVAILABLE',`표 글꼴을 사용할 수 없습니다: ${family}`);
-          cells.push({row,col,rowSpan,colSpan,text,runs,style});
+          cells.push({row,col,rowSpan,colSpan,text,runs,...(paragraphs?{paragraphs:paragraphs.map(p=>p.format)}:{}),style});
       }
       return {rows:rows.length,columns,columnWidthsCssPx:xCuts.slice(1).map((v,i)=>round(v-xCuts[i])),rowHeightsCssPx:yCuts.slice(1).map((v,i)=>round(v-yCuts[i])),cells};
     };
     const initialLayout=elements.map(boxOf);
-    const lineMetrics=el=>{
+    const lineMetrics=(el,ownListOnly=false)=>{
       const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);const chars=[];let tn;
       while((tn=walker.nextNode())) {
-        if(tn.parentElement.closest('svg'))continue;
+        if(tn.parentElement.closest('svg')||ownListOnly&&tn.parentElement.closest('li')!==el)continue;
         for(let i=0;i<tn.length;i++){
           const range=document.createRange();range.setStart(tn,i);range.setEnd(tn,i+1);
           const r=range.getBoundingClientRect(),char=tn.data[i];
@@ -278,6 +389,7 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
       const sourceId=declared?el.dataset.sourceId:null;
       const nodeId=sourceId||el.id||`node-${index+1}`,sourceRef={slideId:id,...(sourceId?{elementId:sourceId}:{path:el.dataset.sourcePath??`node[${index}]`})};
       const at=(code,msg)=>issue(code,msg,id,nodeId,sourceRef);
+      const warnBulletLayout=()=>diagnostics.push({code:'PARAGRAPH_SPACING_APPROXIMATED',reasonKey:'HTML_PPTX_BULLET_LAYOUT_APPROXIMATED',severity:'warning',slideId:id,nodeId,sourceRef,message:'브라우저와 PowerPoint의 글머리 모양·크기·위치가 다를 수 있습니다. PPT에서 확인해 주세요.'});
       if(el.hasAttribute('data-placeholder-marker'))diagnostics.push({code:'SOURCE_PLACEHOLDER_PRESENT',severity:'warning',slideId:id,nodeId,sourceRef,message:'이 HTML에는 원본에서 변환하지 못한 객체의 표시가 있습니다. 다시 만든 PPT에는 상세 설명이 포함되지 않으므로 원본과 비교해 보완해 주세요.'});
       if(el.hasAttribute('data-duotone-baked'))diagnostics.push({code:'PPTX_IMAGE_DUOTONE_BAKED',severity:'warning',slideId:id,nodeId,sourceRef,message:'듀오톤 색상 효과를 그림에 적용했습니다. 효과를 별도 설정으로 편집할 수 없습니다.'});
       if(el.hasAttribute('data-snip-background'))diagnostics.push({code:'PPTX_SHAPE_IMAGE_APPROXIMATED',severity:'warning',slideId:id,nodeId,sourceRef,message:'잘린 모서리 배경은 그림이며 글자는 별도로 편집할 수 있습니다.'});
@@ -291,6 +403,7 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
       for(const pseudo of ['::before','::after']){
         const ps=getComputedStyle(el,pseudo);if(['none','normal','""'].includes(ps.content))continue;
         let glyph='';try{glyph=JSON.parse(ps.content);}catch{}
+        if(pseudo==='::before'&&simpleListBefore(el)&&[...textOwners].some(owner=>['UL','OL'].includes(owner.tagName)&&owner.contains(el)))continue;
         const supported=!declared&&!el.closest('table')&&typeof glyph==='string'&&/^[→←↑↓❯❮]$/u.test(glyph)&&ps.position==='absolute'&&ps.display==='block'&&ps.transform==='none'&&ps.filter==='none'&&ps.clipPath==='none'&&ps.mixBlendMode==='normal'&&ps.textShadow==='none'&&Number(ps.opacity)===1&&!visibleColor(ps.backgroundColor)&&ps.backgroundImage==='none'&&['Top','Right','Bottom','Left'].every(side=>parseFloat(ps[`padding${side}`])===0&&parseFloat(ps[`border${side}Width`])===0&&parseFloat(ps[`margin${side}`])===0);
         if(!supported){at('UNSUPPORTED_OBJECT',`CSS ${pseudo}의 생성 콘텐츠는 명시적인 HTML 요소로 넣어 주세요.`);continue;}
         const probe=document.createElement('span');probe.textContent=glyph;probe.style.cssText='all:initial!important;position:absolute!important;display:block!important;pointer-events:none!important';
@@ -335,9 +448,11 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
       if((box.w<=0||box.h<=0)&&!(editable&&kind==='line'))continue;
       const isSvg=el.tagName.toLowerCase()==='svg';
       const children=[...el.children].filter(c=>!['BR','STYLE'].includes(c.tagName));
+      const nativeList=!declared&&['UL','OL'].includes(el.tagName)&&children.length>0&&children.every(c=>c.tagName==='LI');
+      const nativeParagraphGroup=!declared&&el!==root&&children.length>1&&!([...el.childNodes].some(n=>n.nodeType===3&&n.textContent.trim()))&&children.every(c=>c.tagName==='P'&&!c.querySelector('p,div,ul,ol,table')&&!visibleColor(getComputedStyle(c).backgroundColor)&&['Top','Right','Bottom','Left'].every(side=>parseFloat(getComputedStyle(c)[`border${side}Width`])===0));
       const containsBlock=children.some(c=>!['inline','inline-block','contents'].includes(getComputedStyle(c).display));
       const paragraphLines=!declared&&el.tagName==='P'&&children.length>1&&children.every(c=>c.tagName==='SPAN'&&getComputedStyle(c).display==='block'&&getComputedStyle(c).lineHeight===st.lineHeight&&getComputedStyle(c).fontSize===st.fontSize&&!visibleColor(getComputedStyle(c).backgroundColor)&&getComputedStyle(c).position==='static'&&!c.querySelector('br'))&&![...el.childNodes].some(n=>n.nodeType===3&&n.textContent.trim());
-      const text=declared?el.textContent:el.querySelector('svg')?textRuns(el).map(run=>run.text).join(''):el.innerText;
+      let text=declared?el.textContent:el.querySelector('svg')?textRuns(el).map(run=>run.text).join(''):el.innerText;
       const hasText=typeof text==='string'&&text.trim().length>0;
       const inlineParent=[...textOwners].some(owner=>owner.contains(el));
       const direct=[];
@@ -380,6 +495,8 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
         if(el.tagName==='TABLE')kind='table';
         else if(el.tagName==='IMG'||isSvg)kind='image';
         else if(el.tagName==='HR')kind='line';
+        else if(nativeList&&!inlineParent)kind='text';
+        else if(nativeParagraphGroup&&!inlineParent)kind='text';
         else if(hasText&&(!containsBlock||paragraphLines)&&!inlineParent)kind='text';
         else if(el!==root&&!inlineParent&&(visibleColor(st.backgroundColor)||parseFloat(st.borderTopWidth)>0||st.backgroundImage!=='none'))kind='shape';
         else {addDirect();continue;}
@@ -412,27 +529,49 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
       const stacking=[];for(let parent=el;parent&&parent!==root;parent=parent.parentElement){const ps=getComputedStyle(parent),container=parent.parentElement&&getComputedStyle(parent.parentElement);if(ps.zIndex!=='auto'&&(ps.position!=='static'||/^(inline-)?(grid|flex)$/.test(container?.display)))stacking.push(Number(ps.zIndex));if(ps.order!=='0')at('UNSUPPORTED_OBJECT','CSS order를 지정한 항목은 원본 DOM 순서로 정리해 주세요.');}
       if(stacking.length>1)at('UNSUPPORTED_OBJECT','중첩된 CSS 겹침 문맥은 지원하지 않습니다.');
       style.cssZIndex=stacking.at(-1)??0;
-      let runs;
+      let runs,backgroundBox;
+      let listParagraphs;
       if(kind==='text') {
-        textOwners.add(el);runs=paragraphLines?children.flatMap((child,i)=>{const parts=textRuns(child);return i&&parts.length?[{text:'\n',style:parts[0].style},...parts]:parts;}):textRuns(el);
+        textOwners.add(el);
+        if(nativeList){
+          const measuredList=measureNativeList(el,at),{reserve,tightLine}=measuredList;
+          listParagraphs=measuredList.paragraphs;
+          if(listParagraphs.some(p=>p.bullet))warnBulletLayout();
+          if(reserve>0){backgroundBox={...box};box={...box,x:box.x-reserve,w:box.w+reserve};for(const p of listParagraphs)p.leftPx+=reserve;}
+          if(tightLine){backgroundBox??={...box};box={...box,w:box.w+1};}
+          runs=listParagraphs.flatMap((p,index)=>index?[{text:'\n',style:p.runs[0].style},...p.runs]:p.runs);text=runs.map(r=>r.text).join('');
+          style.padding={top:0,right:0,bottom:0,left:0};
+        }else if(nativeParagraphGroup){
+          const bounds=el.getBoundingClientRect();
+          listParagraphs=children.map((paragraph,index)=>{
+            const cs=getComputedStyle(paragraph),r=paragraph.getBoundingClientRect(),next=children[index+1]?.getBoundingClientRect(),items=textRuns(paragraph);
+            if(!items.length)items.push({text:'',style:plainStyle(cs)});
+            const lines=lineMetrics(paragraph).lines.length||1,paddingTop=parseFloat(cs.paddingTop),paddingBottom=parseFloat(cs.paddingBottom);
+            const lineHeight=Number.isFinite(parseFloat(cs.lineHeight))?parseFloat(cs.lineHeight):Math.max(1,(r.height/renderScale-paddingTop-paddingBottom)/lines);
+            const gap=next?(next.top-r.bottom)/renderScale:parseFloat(cs.marginBottom);if(!Number.isFinite(gap)||gap<-.1)at('UNSUPPORTED_OBJECT','겹치는 HTML 문단은 아직 지원하지 않습니다.');
+            return {beforePx:(index===0?Math.max(0,(r.top-bounds.top)/renderScale):0)+paddingTop,afterPx:paddingBottom+Math.max(0,gap),leftPx:Math.max(0,(r.left-bounds.left)/renderScale+parseFloat(cs.paddingLeft)),rightPx:Math.max(0,(bounds.right-r.right)/renderScale+parseFloat(cs.paddingRight)),indentPx:parseFloat(cs.textIndent)||0,lineHeight:`${lineHeight}px`,align:({start:'left',end:'right'})[cs.textAlign]??cs.textAlign,runs:items};
+          });
+          runs=listParagraphs.flatMap((p,index)=>index?[{text:'\n',style:p.runs[0].style},...p.runs]:p.runs);text=runs.map(r=>r.text).join('');
+          style.padding={top:0,right:0,bottom:0,left:0};
+        }else runs=paragraphLines?children.flatMap((child,i)=>{const parts=textRuns(child);return i&&parts.length?[{text:'\n',style:parts[0].style},...parts]:parts;}):textRuns(el);
         for(const family of new Set([style.fontFamily,...runs.map(r=>r.style.fontFamily)]))if(!await fontAvailable(family))at('FONT_UNAVAILABLE',`글꼴을 사용할 수 없습니다: ${family}`);
         if(runs.map(r=>r.text).join('')!==text)at('UNSUPPORTED_OBJECT','화면 문구와 텍스트 조각의 공백·줄바꿈을 일치시킬 수 없습니다.');
         if(el!==root&&(style.backgroundImage!=='none'||visibleColor(style.fill)||style.strokeWidth>0)) {
           orderKeys.set(`${nodeId}::background`,domOrder.get(el));
-          nodes.push({id:`${nodeId}::background`,kind:'shape',boxCssPx:box,zOrder:order++,content:{},style:{...style},sourceRef,parentId:editable?(el.dataset.parentId??null):null});
+          nodes.push({id:`${nodeId}::background`,kind:'shape',boxCssPx:backgroundBox??box,zOrder:order++,content:{},style:{...style},sourceRef,parentId:editable?(el.dataset.parentId??null):null});
         }
       }
-      let content=kind==='text'?{text,runs,...(paragraphLines?{tableCellGroup:true}:{})}:kind==='image'?{assetId:el.dataset.assetId??null}:{};
+      let content=kind==='text'?{text,runs,...(paragraphLines?{tableCellGroup:true}:{}),...(listParagraphs?{paragraphs:listParagraphs}:{})}:kind==='image'?{assetId:el.dataset.assetId??null}:{};
       if(editable&&kind==='text'){
         const paragraphs=[...el.querySelectorAll('[data-pptx-paragraph]')];
-        if(paragraphs.length>1&&!paragraphs.some(p=>p.querySelector('[data-pptx-list-marker],br:not([data-pptx-empty])'))){
+        if(paragraphs.length>0){
           const parts=paragraphs.map((p,index)=>{
             const cs=getComputedStyle(p),items=textRuns(p);
             if(index<paragraphs.length-1&&items.at(-1)?.text.endsWith('\n')){items.at(-1).text=items.at(-1).text.slice(0,-1);if(!items.at(-1).text)items.pop();}
             if(!items.length){const s=plainStyle(cs);items.push({text:'',style:s});}
-            return {beforePx:parseFloat(cs.paddingTop),afterPx:parseFloat(cs.paddingBottom),leftPx:parseFloat(cs.paddingLeft),rightPx:parseFloat(cs.paddingRight),indentPx:parseFloat(cs.textIndent),lineHeight:cs.lineHeight,align:cs.textAlign,runs:items};
+            return paragraphFromDom(p,items,{first:index===0,last:index===paragraphs.length-1});
           });
-          if(parts.every(p=>p.leftPx===0&&p.rightPx===0&&p.indentPx===0&&Number.isFinite(p.beforePx)&&p.beforePx>=0&&p.beforePx<=20000&&Number.isFinite(p.afterPx)&&p.afterPx>=0&&p.afterPx<=20000&&/^\d+(?:\.\d+)?px$/.test(p.lineHeight)&&parseFloat(p.lineHeight)>0&&parseFloat(p.lineHeight)<=20000&&['left','center','right','justify'].includes(p.align)&&p.runs.every(r=>!r.text.includes('\n')))&&parts.map(p=>p.runs.map(r=>r.text).join('')).join('\n')===content.text){
+          if(parts.every(p=>[p.leftPx,p.rightPx].every(v=>Number.isFinite(v)&&v>=0&&v<=5000)&&Number.isFinite(p.indentPx)&&Math.abs(p.indentPx)<=5000&&Number.isFinite(p.beforePx)&&p.beforePx>=0&&p.beforePx<=20000&&Number.isFinite(p.afterPx)&&p.afterPx>=0&&p.afterPx<=20000&&/^\d+(?:\.\d+)?px$/.test(p.lineHeight)&&parseFloat(p.lineHeight)>0&&parseFloat(p.lineHeight)<=20000&&['left','center','right','justify'].includes(p.align))&&parts.map(p=>p.runs.map(r=>r.text).join('')).join('\n')===content.text){
             content.paragraphs=parts;const d=diagnostics.findIndex(d=>d.code==='PARAGRAPH_SPACING_APPROXIMATED'&&d.slideId===id&&d.nodeId===nodeId);if(d>=0)diagnostics.splice(d,1);
           }
         }
@@ -463,6 +602,7 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
         if(el.tagName!=='TABLE'){at('UNSUPPORTED_OBJECT','표 객체는 실제 HTML table이어야 합니다.');continue;}
         const tableIssues=[];
         content=await measureTable(el,box,(code,message)=>tableIssues.push({code,message}));if(!content){for(const d of tableIssues)at(d.code,d.message);continue;}
+        if(!declared&&content.cells.some(cell=>cell.paragraphs?.some(p=>p.bullet)))warnBulletLayout();
         const allowed=new Set(['셀 안 블록은 여백이나 별도 배치가 없는 한 줄 문구만 지원합니다.','셀 안의 별도 배경·여백·블록 배치는 아직 지원하지 않습니다.','현재 셀 문구와 텍스트 조각의 공백·줄바꿈을 일치시킬 수 없습니다.','표의 장식 화살표는 배경 그림에 보존합니다.']);
         if(allowTableOverlay&&tableIssues.length&&tableIssues.every(d=>d.code==='UNSUPPORTED_OBJECT'&&allowed.has(d.message))&&!declared){
           const pieces=[],tableCssZIndex=style.cssZIndex;let safe=true,pieceSequence=0;

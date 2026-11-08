@@ -1,6 +1,29 @@
 const record=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const positive=value=>Number.isFinite(value)&&value>0;
 
+export function validParagraphBullet(bullet){
+  if(!record(bullet)||!Number.isInteger(bullet.level)||bullet.level<0||bullet.level>8)return false;
+  if(['followTextColor','followTextFont'].some(key=>bullet[key]!==undefined&&typeof bullet[key]!=='boolean'))return false;
+  if(bullet.sourceSize!==undefined&&(!record(bullet.sourceSize)||!['buSzTx','buSzPct','buSzPts'].includes(bullet.sourceSize.kind)||bullet.sourceSize.kind!=='buSzTx'&&(!Number.isInteger(bullet.sourceSize.value)||bullet.sourceSize.value<=0||bullet.sourceSize.value>400000)))return false;
+  if(bullet.type==='char')return typeof bullet.char==='string'&&[...bullet.char].length===1&&!/[\s\u0000-\u001f]/u.test(bullet.char);
+  return bullet.type==='number'&&bullet.format==='arabicPeriod'&&Number.isInteger(bullet.start)&&bullet.start>=1&&bullet.start<=32767&&(bullet.restart===undefined||typeof bullet.restart==='boolean');
+}
+
+export function validSourceSpacing(spacing){
+  return record(spacing)&&Object.entries(spacing).every(([name,value])=>['lnSpc','spcBef','spcAft'].includes(name)&&record(value)&&(name==='lnSpc'&&value.kind==='default'||['spcPct','spcPts'].includes(value.kind)&&Number.isInteger(value.value)&&value.value>=0&&value.value<=(value.kind==='spcPct'?13200000:158400)));
+}
+
+export function validSourceEnd(end){
+  if(!record(end)||!['implicit','explicit'].includes(end.mode))return false;
+  if(end.mode==='implicit')return end.attrs===undefined;
+  if(!record(end.attrs))return false;
+  return Object.entries(end.attrs).every(([key,value])=>{
+    if(['b','i'].includes(key))return ['0','1','true','false'].includes(value);
+    if(!['spc','sz','kern'].includes(key)||typeof value!=='string'||!/^[-+]?\d+$/.test(value))return false;
+    const n=Number(value);return Number.isInteger(n)&&Math.abs(n)<=400000&&(key==='spc'||n>=0)&&(key!=='sz'||n>0);
+  });
+}
+
 export function validateTable(content){
   const errors=[],check=(ok,path,message)=>{if(!ok)errors.push({path,message});};
   if(!record(content))return {valid:false,errors:[{path:'',message:'Expected table content'}]};
@@ -40,6 +63,9 @@ export function validateTable(content){
           if(para.hangingPunct!==undefined)check(typeof para.hangingPunct==='boolean',`${pp}.hangingPunct`,'Invalid hanging punctuation');
           check(Array.isArray(para.runs)&&para.runs.length>0&&para.runs.every(r=>record(r)&&typeof r.text==='string'&&record(r.style)),`${pp}.runs`,'Invalid paragraph text');
           if(Array.isArray(para.runs))check(para.runs.every((r,i)=>r?.marker===undefined||r.marker===true&&i===0),`${pp}.runs`,'Invalid list marker');
+          if(para.bullet!==undefined)check(validParagraphBullet(para.bullet),`${pp}.bullet`,'Invalid paragraph bullet');
+          if(para.sourceSpacing!==undefined)check(validSourceSpacing(para.sourceSpacing),`${pp}.sourceSpacing`,'Invalid source spacing');
+          if(para.sourceEnd!==undefined)check(validSourceEnd(para.sourceEnd),`${pp}.sourceEnd`,'Invalid paragraph end formatting');
         }
         if(paragraphs.every(para=>record(para)&&Array.isArray(para.runs)))check(paragraphs.map(para=>para.runs.map(r=>r?.text??'').join('')).join('\n')===cell.text,`${p}.paragraphs`,'Paragraphs do not match text');
       }

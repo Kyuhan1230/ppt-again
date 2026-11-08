@@ -395,6 +395,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
         return fromPlaceholder(matchedLayout)??fromPlaceholder(masterShape)??fromList(child(child(masterDoc?.documentElement,'txStyles'),styleName))??fromList(child(presentation.documentElement,'defaultTextStyle'));
       };
       const paragraphSetting=(pPr,name)=>paragraphChoice(pPr,[name]);
+      const paragraphBullet=pPr=>paragraphChoice(pPr,['buNone','buChar','buAutoNum','buBlip']);
       const paragraphOwnSetting=(pPr,name)=>{
         const direct=child(pPr,name);if(direct)return direct;
         const level=Number(attr(pPr,'lvl','0'));if(!Number.isInteger(level)||level<0||level>8)return null;
@@ -402,7 +403,6 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
         return child(child(list,`lvl${level+1}pPr`),name)??child(child(list,'defPPr'),name);
       };
       const inheritedRunAttribute=(pPr,name)=>{
-        if(!owner)return null;
         const level=Number(attr(pPr,'lvl','0'));if(!Number.isInteger(level)||level<0||level>8)return null;
         const fromList=list=>attr(child(child(list,`lvl${level+1}pPr`),'defRPr'),name)??attr(child(child(list,'defPPr'),'defRPr'),name);
         const fromPlaceholder=sp=>{
@@ -412,6 +412,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
         };
         const own=fromList(child(tx,'lstStyle'));
         if(own!==null)return own;
+        if(!owner)return null;
         if(ph){
           const styleName=['title','ctrTitle'].includes(phType)?'titleStyle':['body','subTitle','obj'].includes(phType)?'bodyStyle':'otherStyle';
           const inherited=fromPlaceholder(matchedLayout)??fromPlaceholder(masterShape)??fromList(child(child(masterDoc?.documentElement,'txStyles'),styleName));
@@ -492,11 +493,15 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
         if(!Number.isFinite(value)||value<0||value>max)throw new Error('문단의 간격 값이 올바르지 않습니다.');
         return {kind:item.localName,value};
       };
-      const spacingPx=(pPr,name)=>{
-        const spacing=paragraphOwnSetting(pPr,name);if(!spacing)return 0;
+      const spacingPx=(pPr,name,paragraph)=>{
+        const spacing=paragraphSetting(pPr,name);if(!spacing)return 0;
         const {kind,value}=checkedSpacing(spacing);
         if(kind==='spcPct'&&value===0)return 0;
-        return kind==='spcPts'?value/100*4/3:null;
+        if(kind==='spcPts')return value/100*4/3;
+        const fallback=attr(child(pPr,'defRPr'),'sz')??inheritedSize(pPr);
+        const sizes=elements(paragraph).filter(r=>['r','fld'].includes(r.localName)).map(r=>Number(attr(child(r,'rPr'),'sz',fallback)));
+        if(!sizes.length)sizes.push(Number(attr(child(paragraph,'endParaRPr'),'sz',fallback)));
+        const largest=Math.max(...sizes);return Number.isFinite(largest)&&largest>0?largest/100*4/3*1.2*value/100000:null;
       };
       const paragraphLineHeight=pPr=>{
         const spacing=paragraphSetting(pPr,'lnSpc');if(!spacing)return '1.2';
@@ -515,12 +520,28 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
         // Office defaults hanging punctuation to true when it is unspecified.
         const hanging=tableCell?paragraphAttribute(pPr,'hangingPunct','1'):null;
         if(tableCell&&!['0','1','false','true'].includes(hanging))throw new Error('문단의 문장부호 배치 값이 올바르지 않습니다.');
-        return {beforePx:spacingPx(pPr,'spcBef'),afterPx:spacingPx(pPr,'spcAft'),leftPx:px(num(pPr,'marL')),rightPx:px(num(pPr,'marR')),indentPx:px(num(pPr,'indent')),lineHeight:paragraphLineHeight(pPr),align:({l:'left',ctr:'center',r:'right',just:'justify'})[paragraphAlignment(pPr)],...(tableCell?{hangingPunct:['1','true'].includes(hanging)}:{})};
+        const marker=paragraphBullet(pPr),level=Number(attr(pPr,'lvl','0'));
+        const bullet=marker?.localName==='buChar'?{type:'char',char:attr(marker,'char',''),level}:marker?.localName==='buAutoNum'?{type:'number',format:attr(marker,'type'),start:Number(attr(marker,'startAt','1')),restart:attr(marker,'startAt')!==null,level}:null;
+        if(bullet){if(paragraphChoice(pPr,['buClr','buClrTx'])?.localName==='buClrTx')bullet.followTextColor=true;if(paragraphChoice(pPr,['buFont','buFontTx'])?.localName==='buFontTx')bullet.followTextFont=true;}
+        const bulletSize=bullet&&paragraphChoice(pPr,['buSzTx','buSzPct','buSzPts']);
+        if(bulletSize){const kind=bulletSize.localName,value=num(bulletSize,'val',NaN);if(kind==='buSzTx'||Number.isInteger(value)&&value>0&&value<=400000)bullet.sourceSize=kind==='buSzTx'?{kind}:{kind,value};}
+        const sourceSpacing={};for(const name of ['lnSpc','spcBef','spcAft']){const spacing=paragraphSetting(pPr,name);if(spacing)sourceSpacing[name]=checkedSpacing(spacing);else if(name==='lnSpc')sourceSpacing[name]={kind:'default'};}
+        const end=child(p,'endParaRPr'),attrs={};for(const key of ['spc','sz','kern','b','i']){const value=attr(end,key);if(value!==null)attrs[key]=value;}
+        const sourceEnd=end?{mode:'explicit',attrs}:{mode:'implicit'};
+        return {beforePx:spacingPx(pPr,'spcBef',p),afterPx:spacingPx(pPr,'spcAft',p),leftPx:px(Number(paragraphAttribute(pPr,'marL','0'))),rightPx:px(Number(paragraphAttribute(pPr,'marR','0'))),indentPx:px(Number(paragraphAttribute(pPr,'indent','0'))),lineHeight:paragraphLineHeight(pPr),align:({l:'left',ctr:'center',r:'right',just:'justify'})[paragraphAlignment(pPr)],...(bullet?{bullet}:{}),...(Object.keys(sourceSpacing).length?{sourceSpacing}:{}),sourceEnd,...(tableCell?{hangingPunct:['1','true'].includes(hanging)}:{})};
       });
       const useParagraphLayout=Boolean((owner||tx?.parentNode?.localName==='tc')&&paras.length>0&&paras.every((p,i)=>{
         const layout=paragraphLayout[i];return layout.beforePx!==null&&layout.afterPx!==null&&layout.lineHeight&&layout.align&&[layout.leftPx,layout.rightPx].every(n=>Number.isFinite(n)&&n>=0&&n<=5000)&&Number.isFinite(layout.indentPx)&&Math.abs(layout.indentPx)<=5000;
-      })&&(paras.some(p=>{const pPr=child(p,'pPr');return ['marL','marR','indent'].some(k=>num(pPr,k));})||
-        paras.length>1&&(paras.some(p=>['lnSpc','spcBef','spcAft'].some(k=>paragraphOwnSetting(child(p,'pPr'),k)))||paragraphLayout.some(p=>p.align!==paragraphLayout[0].align))||
+      })&&(paragraphLayout.some(p=>p.bullet||p.leftPx||p.rightPx||p.indentPx)||
+        paras.some(p=>{
+          const end=child(p,'endParaRPr');
+          return ['spc','b','i'].some(key=>end?.hasAttribute(key))||!end&&elements(p).some(run=>['r','fld'].includes(run.localName)&&['spc','b','i'].some(key=>child(run,'rPr')?.hasAttribute(key)));
+        })||
+        paras.some(p=>{
+          const properties=child(p,'pPr'),line=paragraphOwnSetting(properties,'lnSpc');
+          return ['spcBef','spcAft'].some(k=>paragraphOwnSetting(properties,k))||line&&(paras.length>1||child(line,'spcPct'));
+        })||
+        paras.length>1&&paragraphLayout.some(p=>p.align!==paragraphLayout[0].align)||
         ['1','true'].includes(attr(body,'spcFirstLastPara','0'))&&paras.some(p=>['spcBef','spcAft'].some(k=>paragraphOwnSetting(child(p,'pPr'),k)))));
       const paragraphRuns=[];
       let inheritedTextColorEntry=null,inheritedTextColorAmbiguous=false;
@@ -539,7 +560,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
       }
       if(num(body,'rot')!==0||attr(body,'vert','horz')!=='horz'||num(body,'numCol',1)!==1||num(body,'rtlCol')!==0||num(body,'fromWordArt')!==0||child(body,'prstTxWarp')&&attr(child(body,'prstTxWarp'),'prst')!=='textNoShape')issue('회전·세로쓰기·다단·워드아트 텍스트는 아직 지원하지 않습니다.',id);
       const runStyle=(rPr,pPr,script='latin')=>{
-        const def=child(pPr,'defRPr'),get=k=>attr(rPr,k,attr(def,k,['b','i'].includes(k)?inheritedRunAttribute(pPr,k):null)),kind=script==='latin'?'latin':'ea';
+        const def=child(pPr,'defRPr'),get=k=>attr(rPr,k,attr(def,k,['b','i','spc','kern'].includes(k)?inheritedRunAttribute(pPr,k):null)),kind=script==='latin'?'latin':'ea';
         const baseline=Number(get('baseline')??0);
         if(!Number.isInteger(baseline)||Math.abs(baseline)>100000)issue('지원 범위를 벗어난 위첨자·아래첨자 위치입니다.',id);
         const highlighted=child(rPr,'highlight')??child(def,'highlight');
@@ -604,27 +625,29 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
         const bulletColor=paragraphChoice(pPr,['buClr','buClrTx']);if(bulletColor?.localName==='buClr')style.color=color(bulletColor,style.color);
         return style;
       };
-      let previousNumber=null;
+      const previousNumbers=[];
       for(const [pi,p] of paras.entries()){
-        const pPr=child(p,'pPr'),bullet=child(pPr,'buChar'),bulletChar=attr(bullet,'char',''),auto=child(pPr,'buAutoNum');
+        const pPr=child(p,'pPr'),choice=paragraphBullet(pPr),bullet=choice?.localName==='buChar'?choice:null,bulletChar=attr(bullet,'char',''),auto=choice?.localName==='buAutoNum'?choice:null;
         let numberLabel=null;
-        if(auto&&allowPartial&&attr(auto,'type')==='arabicPeriod'){
+        if(auto&&attr(auto,'type')==='arabicPeriod'){
           const start=attr(auto,'startAt'),level=Number(attr(pPr,'lvl','0')),parsed=start===null?null:Number(start);
           if(Number.isInteger(level)&&level>=0&&level<=8&&(parsed===null||Number.isInteger(parsed)&&parsed>=1&&parsed<=32767)){
-            const count=parsed??(previousNumber?.level===level?previousNumber.count+1:1);
-            if(count<=32767){numberLabel=`${count}.`;previousNumber={level,count};approximate('PPTX_AUTONUM_APPROXIMATED','자동 번호를 텍스트로 옮겼습니다. 들여쓰기와 번호 배치는 원본과 다를 수 있습니다.');}
+            const groupStart=parsed??1,previous=previousNumbers[level],restart=!previous||previous.groupStart!==groupStart;
+            const count=restart?groupStart:previous.count+1;
+            if(count<=32767){numberLabel=`${count}.`;previousNumbers[level]={groupStart,count};previousNumbers.length=level+1;if(paragraphLayout[pi].bullet){paragraphLayout[pi].bullet.start=count;paragraphLayout[pi].bullet.restart=restart;}}
           }
         }
-        if(!auto)previousNumber=null;
+        if(!auto){const level=Number(attr(pPr,'lvl','0'));previousNumbers.length=Number.isInteger(level)&&level>=0&&level<=8?Math.min(previousNumbers.length,level):0;}
         const hasInheritedBulletProperties=elements(pPr).some(n=>/^bu/.test(n.localName))&&!bullet&&!child(pPr,'buNone');
-        const unsupportedBullet=auto&&numberLabel===null||child(pPr,'buBlip')||hasInheritedBulletProperties&&!auto||(bullet&&(!bulletChar||/[\u0000-\u001f]/.test(bulletChar)||[...bulletChar].length!==1));
+        const unsupportedBullet=auto&&numberLabel===null||choice?.localName==='buBlip'||hasInheritedBulletProperties&&!auto||(bullet&&(!bulletChar||/[\u0000-\u001f]/.test(bulletChar)||[...bulletChar].length!==1));
         if(unsupportedBullet)issue('이 글머리표는 아직 지원하지 않습니다.',id);
         const usesTab=all(p,'t').some(t=>t.textContent.includes('\t'))||elements(p).some(n=>n.localName==='tab');
         if(usesTab){if(allowPartial)approximate('PPTX_TEXT_TAB_APPROXIMATED','기본 탭 간격으로 표시했으며 개별 탭 위치는 원본과 다를 수 있습니다.');else issue('문단 탭은 아직 지원하지 않습니다.',id);}
-        if((bullet&&!unsupportedBullet||num(pPr,'marL')||num(pPr,'marR')||num(pPr,'indent'))&&!approximatedParagraphs.has(id)){
+        if(((bullet||auto)&&!unsupportedBullet||num(pPr,'marL')||num(pPr,'marR')||num(pPr,'indent'))&&!approximatedParagraphs.has(id)){
           diagnostics.push({...diagnostic('PARAGRAPH_SPACING_APPROXIMATED','문단 들여쓰기와 글머리 배치는 근사했습니다.',{slideId:slide.id,nodeId:id},'warning'),reasonKey:'PPTX_PARAGRAPH_INDENT_APPROXIMATED'});approximatedParagraphs.add(id);
         }
         if(!useParagraphLayout&&['spcBef','spcAft'].some(k=>{const spacing=paragraphOwnSetting(pPr,k);return spacing&&checkedSpacing(spacing).value!==0;}))approximate('PPTX_PARAGRAPH_SPACING_APPROXIMATED','문단 앞뒤 간격은 그대로 옮기지 못했습니다.');
+        if(useParagraphLayout&&['spcBef','spcAft'].some(k=>{const spacing=paragraphSetting(pPr,k),value=spacing&&checkedSpacing(spacing);return value?.kind==='spcPct'&&value.value!==0;}))approximate('PPTX_PARAGRAPH_SPACING_APPROXIMATED','비율로 지정한 문단 간격의 원래 값은 보존했으며 HTML 표시는 근사했습니다.');
         if(!paragraphLineHeight(pPr)&&paragraphSetting(pPr,'lnSpc')){
           if(allowPartial)approximate('PPTX_LINE_SPACING_APPROXIMATED','줄 간격 0은 기본 간격으로 표시했습니다.');else issue('줄 간격 0은 아직 지원하지 않습니다.',id);
         }
