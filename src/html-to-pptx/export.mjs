@@ -11,6 +11,7 @@ import {chartText} from './charts.mjs';
 import {planFontEmbedding,embedPptxFonts} from './font-embedding.mjs';
 import {pptCharacterSpacing} from './text-spacing.mjs';
 import {applyTextParagraphs,paragraphTextRuns} from './write-paragraphs.mjs';
+import {safeError} from './error-log.mjs';
 
 function paint(value,opacity=1){
   if(!value||value==='transparent')return {color:'FFFFFF',transparency:100};
@@ -237,9 +238,9 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
     }
     const raw=new Uint8Array(await pptx.write({outputType:'uint8array'}));let pptxBytes=applyTransitions(applyNativePresetShapes(applyFlatGroups(applyTextParagraphs(raw,measured.model,pointScale,paint,resolveTextFont),measured.model,objectMap,pointScale),measured.model,objectMap),measured.model);
     if(fontPlan.faces.length){
-      try{pptxBytes=embedPptxFonts(pptxBytes,fontPlan.faces,{container:'eot'});}catch(e){issue(e.code??'EXPORT_FAILED','글꼴을 PPT에 포함하지 못했습니다.');return failed();}
+      try{pptxBytes=embedPptxFonts(pptxBytes,fontPlan.faces,{container:'eot'});}catch(e){diagnostics.push({...diagnostic(e.code??'EXPORT_FAILED','글꼴을 PPT에 포함하지 못했습니다.'),error:safeError(e)});return failed();}
       profile.fontEmbedding=fontPlan.report.map(entry=>({...entry,status:'included'}));
     }
     return {status:'generated',pptxBytes,objectMap,profile,diagnostics};
-  }catch(e){issue('EXPORT_FAILED',`PPT 생성 실패: ${e.message}`);return failed();}
+  }catch(e){diagnostics.push({...diagnostic('EXPORT_FAILED',`PPT 생성 실패: ${e.message}`),error:safeError(e)});return failed();}
 }

@@ -58,6 +58,8 @@ npm start
 
 브라우저에서 `http://127.0.0.1:42337`을 엽니다. 종료할 때는 실행한 터미널에서 `Ctrl+C`를 누릅니다. 다른 프로그램이 포트를 사용하면 종료한 뒤 다시 실행하세요.
 
+변환 오류와 서버 시작 오류는 `.local/logs/errors-YYYY-MM-DD.log`에 기록합니다. 파일의 날짜는 UTC 기준입니다. 로그 확인과 Windows 감시 오류 점검 방법은 [오류 로그와 Windows 자원 감시](docs/error-log-handoff.md)를 참고하세요.
+
 ## 웹 화면에서 사용하기
 
 <p align="center">

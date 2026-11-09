@@ -16,6 +16,7 @@ import {snippedTextGeometry,snippedTextSvg} from './snip-text.mjs';
 import {simpleOuterShadow} from './shadow.mjs';
 import {nearlyEllipticalGeometry} from './ellipse-geometry.mjs';
 import {readTransition} from './transitions.mjs';
+import {safeError} from './error-log.mjs';
 
 const elements=n=>[...(n?.childNodes??[])].filter(c=>c.nodeType===1);
 const child=(n,name)=>elements(n).find(c=>c.localName===name);
@@ -1142,7 +1143,7 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
     for(const e of validateModel(model).errors)diagnostics.push({...diagnostic('INPUT_INVALID',`${e.path}: ${e.message}`),reasonKey:'PPTX_MODEL_INVALID',blocking:true});
   }catch(e){
     const code=typeof e.code==='string'&&(/^(FONT_|CHART_)/.test(e.code)||e.code==='LIMIT_EXCEEDED')?e.code:'INPUT_INVALID';
-    diagnostics.push({...diagnostic(code,e.message,currentContext),...currentContext,reasonKey:fatalReasons.get(e.message)??(code==='INPUT_INVALID'?'PPTX_PARSE_FATAL':undefined),blocking:true});
+    diagnostics.push({...diagnostic(code,e.message,currentContext),...currentContext,reasonKey:fatalReasons.get(e.message)??(code==='INPUT_INVALID'?'PPTX_PARSE_FATAL':undefined),blocking:true,error:safeError(e)});
   }
   // Preserve the locations collected before a later fatal package error as
   // well as those from a successful parse. The model itself remains private.

@@ -8,6 +8,7 @@ import {normalizeWoff2Fonts} from './woff2-fonts.mjs';
 import {applyFallbackFont} from './fallback-font.mjs';
 import {renderChartSvg} from './charts.mjs';
 import {officeCompatiblePresetGradient,presetVectorMarkup} from './preset-vector.mjs';
+import {safeError} from './error-log.mjs';
 
 export function scopeEmbeddedModelErrors(errors,slides){
   return errors.map(error=>{const match=/^slides\[(\d+)\]\./.exec(error.path),slide=match?slides[Number(match[1])]:null;return diagnostic('INPUT_INVALID',`${error.path}: ${error.message}`,slide?{slideId:slide.id}:{});});
@@ -901,6 +902,6 @@ export async function measureInput(input,runtime) {
     }
     return result;
   } catch(e) {
-    result.diagnostics.push(diagnostic('RENDER_INCOMPLETE',`브라우저 측정이 완료되지 않았습니다: ${e.message}`));return result;
+    result.diagnostics.push({...diagnostic('RENDER_INCOMPLETE',`브라우저 측정이 완료되지 않았습니다: ${e.message}`),error:safeError(e)});return result;
   } finally {await session?.context.close();}
 }

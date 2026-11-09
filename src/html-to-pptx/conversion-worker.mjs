@@ -7,6 +7,7 @@ import {createBrowserRuntime} from './browser-runtime.mjs';
 import {chartText,validateChart} from './charts.mjs';
 import {sha256} from './assets.mjs';
 import {renderPowerPointChartImages} from './powerpoint-chart-images.mjs';
+import {safeError} from './error-log.mjs';
 
 let runtime=null,cancelled=false,started=false,finished=false;
 const limit=condition=>{if(condition)throw Object.assign(new Error('INPUT_LIMIT'),{code:'INPUT_LIMIT'});};
@@ -62,14 +63,14 @@ process.on('message',async message=>{
               if(d.severity!=='error')return d;
               if(d.code==='FONT_UNAVAILABLE')return {...d,code:'FONT_PREVIEW_SUBSTITUTED',severity:'warning'};
               const captured=d.slideId?previewIds.has(d.slideId):previewIds.size===parsed.model.slides.length;
-              return captured?{code:'PPTX_PREVIEW_LAYOUT_APPROXIMATED',severity:'warning',slideId:d.slideId??null,message:'미리보기 일부 배치가 원본과 다를 수 있습니다. 원본과 비교해 주세요.'}:{code:'PPTX_PREVIEW_UNAVAILABLE',severity:'warning',reasonKey:'PREVIEW_UNAVAILABLE',slideId:d.slideId??null,message:'HTML은 만들었지만 미리보기를 확인하지 못했습니다.'};
+              return captured?{code:'PPTX_PREVIEW_LAYOUT_APPROXIMATED',severity:'warning',slideId:d.slideId??null,message:'미리보기 일부 배치가 원본과 다를 수 있습니다. 원본과 비교해 주세요.'}:{code:'PPTX_PREVIEW_UNAVAILABLE',severity:'warning',reasonKey:'PREVIEW_UNAVAILABLE',slideId:d.slideId??null,message:'HTML은 만들었지만 미리보기를 확인하지 못했습니다.',error:d.error};
             });
             for(const slide of parsed.model.slides)if(!previewIds.has(slide.id)&&!previewDiagnostics.some(d=>d.code==='PPTX_PREVIEW_UNAVAILABLE'&&d.slideId===slide.id))previewDiagnostics.push({code:'PPTX_PREVIEW_UNAVAILABLE',severity:'warning',reasonKey:'PREVIEW_UNAVAILABLE',slideId:slide.id,message:'HTML은 만들었지만 미리보기를 확인하지 못했습니다.'});
             const diagnostics=[...measured.diagnostics,...previewDiagnostics];
             measured={...preview.measured,model:parsed.model,diagnostics:[...new Map(diagnostics.map(d=>[JSON.stringify(d),d])).values()]};
           }catch(error){
             if(cancelled||['INPUT_INVALID','INPUT_LIMIT','LIMIT_EXCEEDED','JOB_CANCELLED','JOB_MEMORY_LIMIT','JOB_TIMEOUT'].includes(error.code))throw error;
-            measured.diagnostics.push({code:'PPTX_PREVIEW_UNAVAILABLE',severity:'warning',reasonKey:'PREVIEW_UNAVAILABLE',message:'HTML은 만들었지만 미리보기를 확인하지 못했습니다.'});
+            measured.diagnostics.push({code:'PPTX_PREVIEW_UNAVAILABLE',severity:'warning',reasonKey:'PREVIEW_UNAVAILABLE',message:'HTML은 만들었지만 미리보기를 확인하지 못했습니다.',error:safeError(error)});
           }
         }
       }
@@ -84,10 +85,10 @@ process.on('message',async message=>{
     }else throw new Error('INPUT_INVALID');
   }catch(caught){error=caught;}
   finally{
-    try{await runtime?.close();}catch{error=Object.assign(new Error('JOB_CLEANUP_FAILED'),{code:'JOB_CLEANUP_FAILED'});}
+    try{await runtime?.close();}catch(cause){error=Object.assign(new Error('JOB_CLEANUP_FAILED',{cause:error??cause}),{code:'JOB_CLEANUP_FAILED'});}
     runtime=null;finished=true;
     if(process.connected){
-      const response=error?{type:'error',code:error.code??'JOB_FAILED'}:cancelled?{type:'error',code:'JOB_CANCELLED'}:{type:'result',result};
+      const response=error?{type:'error',code:error.code??'JOB_FAILED',error:safeError(error)}:cancelled?{type:'error',code:'JOB_CANCELLED'}:{type:'result',result};
       process.send(response,()=>process.disconnect());
     }
   }

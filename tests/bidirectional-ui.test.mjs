@@ -1,5 +1,6 @@
 import test,{before,after} from 'node:test';
 import assert from 'node:assert/strict';
+import {once} from 'node:events';
 import fs from 'node:fs/promises';
 import {chromium} from 'playwright-core';
 import {createHtmlServer} from '../src/html-to-pptx/server.mjs';
@@ -18,8 +19,15 @@ test('file picker remains keyboard accessible and clearly named after selection'
   await page.goto(app.url);const picker=page.locator('.file-area').getByLabel(/파일/);
   assert.equal(await picker.count(),1);await page.keyboard.press('Tab');await page.keyboard.press('Tab');
   assert.equal(await picker.evaluate(input=>document.activeElement===input),true);
-  const pending=page.waitForEvent('filechooser');await page.keyboard.press('Enter');
-  const chooser=await pending;await chooser.setFiles({name:'keyboard.html',mimeType:'text/html',buffer:Buffer.from(source)});await analyze(page);
+  // Await the browser's interception setup before triggering the chooser.
+  const cdp=await context.newCDPSession(page);await cdp.send('Page.enable');await cdp.send('Page.setInterceptFileChooserDialog',{enabled:true});
+  const [chooser]=await Promise.all([
+    once(cdp,'Page.fileChooserOpened',{signal:AbortSignal.timeout(30000)}).then(([event])=>event),
+    page.keyboard.press('Enter')
+  ]);assert.equal(chooser.mode,'selectSingle');
+  const {node}=await cdp.send('DOM.describeNode',{backendNodeId:chooser.backendNodeId});
+  assert.equal(node.nodeName,'INPUT');assert.ok(node.attributes.some((value,index)=>index%2===0&&value==='id'&&node.attributes[index+1]==='html-file'));
+  await picker.setInputFiles({name:'keyboard.html',mimeType:'text/html',buffer:Buffer.from(source)});await analyze(page);
   assert.equal(await page.locator('.file-area').getByLabel(/파일/).count(),1);
   await page.locator('#delete-button').click();await page.waitForFunction(()=>document.getElementById('status-badge').dataset.state==='deleted');
  }finally{await context.close();}
