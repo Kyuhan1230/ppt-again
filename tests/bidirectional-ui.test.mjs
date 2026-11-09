@@ -13,6 +13,17 @@ after(async()=>{await browser?.close();await app?.close();});
 async function select(page,name,buffer){await page.locator('#html-file').setInputFiles({name,mimeType:name.endsWith('.pptx')?'application/vnd.openxmlformats-officedocument.presentationml.presentation':'text/html',buffer:Buffer.from(buffer)});}
 async function analyze(page){await page.waitForFunction(()=>['analyzed','failed'].includes(document.getElementById('status-badge').dataset.state));assert.equal(await page.locator('#status-badge').getAttribute('data-state'),'analyzed',await page.locator('#diagnostic-list').textContent());}
 async function download(page){const pending=page.waitForEvent('download');await page.locator('#download-button').click();const file=await pending,bytes=await fs.readFile(await file.path());await page.waitForFunction(()=>document.getElementById('status-badge').dataset.state==='generated');return {name:file.suggestedFilename(),bytes};}
+test('file picker remains keyboard accessible and clearly named after selection',async()=>{
+ const context=await browser.newContext(),page=await context.newPage();try{
+  await page.goto(app.url);const picker=page.locator('.file-area').getByLabel(/파일/);
+  assert.equal(await picker.count(),1);await page.keyboard.press('Tab');await page.keyboard.press('Tab');
+  assert.equal(await picker.evaluate(input=>document.activeElement===input),true);
+  const pending=page.waitForEvent('filechooser');await page.keyboard.press('Enter');
+  const chooser=await pending;await chooser.setFiles({name:'keyboard.html',mimeType:'text/html',buffer:Buffer.from(source)});await analyze(page);
+  assert.equal(await page.locator('.file-area').getByLabel(/파일/).count(),1);
+  await page.locator('#delete-button').click();await page.waitForFunction(()=>document.getElementById('status-badge').dataset.state==='deleted');
+ }finally{await context.close();}
+});
 test('tooltip dismisses with Escape and reopens on renewed focus or hover',async()=>{
  const context=await browser.newContext({viewport:{width:1280,height:900}}),page=await context.newPage();try{
   await page.route('**/api/analyze',route=>route.fulfill({json:{id:'tooltip-escape',fileName:'sample.pptx',sourceType:'pptx',targetType:'html',status:'analyzed',slideCount:1,slides:[],exportAvailable:true,diagnostics:[]}}));
