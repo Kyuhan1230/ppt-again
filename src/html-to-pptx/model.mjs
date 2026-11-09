@@ -1,16 +1,20 @@
 import {canvasDiagnostics} from './canvas.mjs';
-import {validateTable} from './tables.mjs';
+import {validateTable,validParagraphBullet,validSourceSpacing,validSourceEnd} from './tables.mjs';
 import {validateChart} from './charts.mjs';
+import {validPresetVector} from './preset-vector.mjs';
+import {validTransition} from './transitions.mjs';
 const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const nonempty = v => typeof v === 'string' && v.trim().length > 0;
 const digest = v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
 const kinds = new Set(['text', 'shape', 'line', 'image', 'group', 'table', 'chart']);
-const codes = new Set(['INPUT_INVALID', 'SLIDE_ROOT_REQUIRED', 'ASSET_MISSING', 'FONT_UNAVAILABLE', 'FONT_SUBSTITUTED',
+const codes = new Set(['PPTX_FONT_REPLACED', 'PPTX_OBJECT_PLACEHOLDER', 'SOURCE_PLACEHOLDER_PRESENT', 'PPTX_PREVIEW_UNAVAILABLE', 'PPTX_PREVIEW_LAYOUT_APPROXIMATED', 'PPTX_GROUP_SCALE_APPROXIMATED', 'PPTX_SHAPE_IMAGE_APPROXIMATED', 'INPUT_INVALID', 'SLIDE_ROOT_REQUIRED', 'ASSET_MISSING', 'FONT_UNAVAILABLE', 'FONT_SUBSTITUTED', 'FONT_PREVIEW_SUBSTITUTED',
+  'PPTX_IMAGE_APPEARANCE_APPROXIMATED', 'PPTX_TABLE_STYLE_APPROXIMATED', 'PPTX_SHADOW_OMITTED', 'PPTX_SHADOW_APPROXIMATED', 'PPTX_ARROWHEAD_OMITTED',
+  'PPTX_MATH_IMAGE_FALLBACK', 'PPTX_IMAGE_DUOTONE_BAKED', 'PPTX_ANIMATION_OMITTED',
   'FONT_INVALID','FONT_FORMAT_UNSUPPORTED','FONT_VARIABLE_UNSUPPORTED','FONT_STYLE_UNSUPPORTED','FONT_STYLE_MISMATCH','FONT_GLYPH_MISSING',
   'FONT_SOURCE_UNSUPPORTED','FONT_SUBSET_UNSUPPORTED','FONT_ASSET_LIMIT','FONT_EMBEDDING_RESTRICTED','FONT_EMBEDDING_INVALID','FONT_EMBEDDING_UNSUPPORTED',
   'FONT_PREVIEW_ONLY','FONT_BITMAP_ONLY','FONT_SUBSETTING_RESTRICTED','FONT_NOT_PORTABLE',
   'CHART_DATA_REQUIRED','CHART_DATA_MISMATCH','LIMIT_EXCEEDED',
-  'TABLE_LAYOUT_APPROXIMATED', 'SVG_TEXT_APPROXIMATED', 'SCRIPT_REQUIRED', 'UNSUPPORTED_OBJECT', 'SVG_TEXT_NOT_EDITABLE', 'RENDER_INCOMPLETE', 'EXPORT_FAILED']);
+  'TABLE_LAYOUT_APPROXIMATED', 'TABLE_HEIGHT_EXPANDED', 'PARAGRAPH_SPACING_APPROXIMATED', 'SVG_TEXT_APPROXIMATED', 'SCRIPT_REQUIRED', 'UNSUPPORTED_OBJECT', 'SVG_TEXT_NOT_EDITABLE', 'RENDER_INCOMPLETE', 'EXPORT_FAILED']);
 
 export function diagnostic(code, message, location = {}, severity = 'error') {
   return {code, severity, slideId: location.slideId ?? null, nodeId: location.nodeId ?? null,
@@ -73,6 +77,8 @@ export function validateModel(value) {
       const sp = p(`slides[${i}]`);
       if (!record(slide)) { check(false, sp, 'Expected slide'); continue; }
       check(nonempty(slide.id) && !slideIds.has(slide.id), `${sp}.id`, 'Slide ID missing or duplicated'); slideIds.add(slide.id);
+      if(slide.animationOmitted!==undefined)check(slide.animationOmitted===true,`${sp}.animationOmitted`,'Invalid animation flag');
+      if(slide.transition!==undefined)check(validTransition(slide.transition),`${sp}.transition`,'Invalid slide transition');
       for (const k of ['widthCssPx', 'heightCssPx']) check(Number.isFinite(slide[k]) && slide[k] > 0, `${sp}.${k}`, 'Expected positive finite dimension');
       const nodes = array(slide.nodes, `${sp}.nodes`), byId = new Map();
       for (const [j, n] of nodes.entries()) {
@@ -87,10 +93,50 @@ export function validateModel(value) {
         check(Number.isInteger(n.zOrder) && n.zOrder >= 0, `${np}.zOrder`, 'Invalid stacking order');
         check(record(n.content), `${np}.content`, 'Expected content');
         check(record(n.style), `${np}.style`, 'Expected style');
+        if(n.style?.wrapAllowance!==undefined)check(Number.isFinite(n.style.wrapAllowance)&&n.style.wrapAllowance>=0&&n.style.wrapAllowance<=5000,`${np}.style.wrapAllowance`,'Invalid text wrapping allowance');
+        if(n.style?.renderStrokeWidth!==undefined)check(n.kind==='line'&&Number.isFinite(n.style.renderStrokeWidth)&&n.style.renderStrokeWidth>=n.style.strokeWidth&&n.style.renderStrokeWidth<=1024,`${np}.style.renderStrokeWidth`,'Invalid visible line width');
+        if(n.style?.shadow!==undefined){
+          const sh=n.style.shadow;check(record(sh)&&['x','y'].every(k=>Number.isFinite(sh[k])&&Math.abs(sh[k])<=2000)&&Number.isFinite(sh.blur)&&sh.blur>=0&&sh.blur<=2000&&['r','g','b'].every(k=>Number.isInteger(sh[k])&&sh[k]>=0&&sh[k]<=255)&&Number.isFinite(sh.alpha)&&sh.alpha>=0&&sh.alpha<=1,`${np}.style.shadow`,'Invalid outer shadow');
+        }
         check(record(n.sourceRef) && n.sourceRef.slideId === slide.id && (nonempty(n.sourceRef.elementId) || nonempty(n.sourceRef.path)), `${np}.sourceRef`, 'Expected source location on this slide');
         check(n.parentId === null || nonempty(n.parentId), `${np}.parentId`, 'Expected parent or null');
-        if (n.kind === 'text') check(typeof n.content?.text === 'string', `${np}.content.text`, 'Expected text');
-        if (n.kind === 'image') check(assetIds.has(n.content?.assetId), `${np}.content.assetId`, 'Unknown asset reference');
+        if (n.kind === 'text') {
+          check(typeof n.content?.text === 'string', `${np}.content.text`, 'Expected text');
+          if(n.style?.tabSize!==undefined)check(Number.isFinite(n.style.tabSize)&&n.style.tabSize>0&&n.style.tabSize<=5000,`${np}.style.tabSize`,'Invalid tab size');
+          if(n.content?.paragraphs!==undefined){
+            const paragraphs=array(n.content.paragraphs,`${np}.content.paragraphs`);
+            check(paragraphs.length>0&&paragraphs.length<=10000,`${np}.content.paragraphs`,'Invalid paragraph count');
+            for(const [k,para] of paragraphs.entries()){
+              const pp=`${np}.content.paragraphs[${k}]`;
+              if(!record(para)){check(false,pp,'Expected paragraph');continue;}
+              for(const key of ['beforePx','afterPx'])check(Number.isFinite(para[key])&&para[key]>=0&&para[key]<=20000,`${pp}.${key}`,'Invalid paragraph spacing');
+              for(const key of ['leftPx','rightPx'])check(Number.isFinite(para[key])&&para[key]>=0&&para[key]<=5000,`${pp}.${key}`,'Invalid paragraph margin');
+              check(Number.isFinite(para.indentPx)&&Math.abs(para.indentPx)<=5000,`${pp}.indentPx`,'Invalid paragraph indent');
+              check(typeof para.lineHeight==='string'&&/^\d+(?:\.\d+)?(?:px)?$/.test(para.lineHeight)&&Number.parseFloat(para.lineHeight)>0&&Number.parseFloat(para.lineHeight)<=20000,`${pp}.lineHeight`,'Invalid paragraph line height');
+              check(['left','center','right','justify'].includes(para.align),`${pp}.align`,'Invalid paragraph alignment');
+              check(Array.isArray(para.runs)&&para.runs.length>0&&para.runs.every(r=>record(r)&&typeof r.text==='string'&&record(r.style)),`${pp}.runs`,'Invalid paragraph text');
+              if(Array.isArray(para.runs))check(para.runs.every((r,i)=>r?.marker===undefined||r.marker===true&&i===0),`${pp}.runs`,'Invalid list marker');
+              if(para.bullet!==undefined)check(validParagraphBullet(para.bullet),`${pp}.bullet`,'Invalid paragraph bullet');
+              if(para.sourceSpacing!==undefined)check(validSourceSpacing(para.sourceSpacing),`${pp}.sourceSpacing`,'Invalid source spacing');
+              if(para.sourceEnd!==undefined)check(validSourceEnd(para.sourceEnd),`${pp}.sourceEnd`,'Invalid paragraph end formatting');
+            }
+            if(paragraphs.every(para=>record(para)&&Array.isArray(para.runs)))check(paragraphs.map(para=>para.runs.map(r=>r?.text??'').join('')).join('\n')===n.content.text,`${np}.content.paragraphs`,'Paragraphs do not match text');
+          }
+        }
+        if (n.kind === 'image') {
+          check(assetIds.has(n.content?.assetId), `${np}.content.assetId`, 'Unknown asset reference');
+          if(n.content?.rounding!==undefined)check(n.content.rounding===true,`${np}.content.rounding`,'Invalid image shape');
+          if(n.content?.duotoneBaked!==undefined)check(n.content.duotoneBaked===true,`${np}.content.duotoneBaked`,'Invalid image effect flag');
+          if(n.content?.snippedTextBackground!==undefined)check(n.content.snippedTextBackground===true&&d.assets.find(a=>a.id===n.content.assetId)?.mime==='image/svg+xml',`${np}.content.snippedTextBackground`,'Invalid text shape background');
+          if(n.content?.editableVector!==undefined){
+            check(validPresetVector(n.content.editableVector),`${np}.content.editableVector`,'Invalid editable vector');
+            check(d.assets.find(a=>a.id===n.content.assetId)?.mime==='image/svg+xml'&&!n.content.crop,`${np}.content.editableVector`,'Editable vector requires an uncropped SVG asset');
+          }
+          if(n.content?.crop!==undefined){
+            const crop=n.content.crop;
+            check(record(crop)&&['left','top','right','bottom'].every(key=>Number.isInteger(crop[key])&&crop[key]>=0&&crop[key]<100000)&&crop.left+crop.right<100000&&crop.top+crop.bottom<100000,`${np}.content.crop`,'Invalid image crop');
+          }
+        }
         if(n.kind==='table'){
           check(d.version===2,`${np}.kind`,'Tables require model version 2');
           const table=validateTable(n.content);for(const error of table.errors)check(false,`${np}.content.${error.path}`,error.message);

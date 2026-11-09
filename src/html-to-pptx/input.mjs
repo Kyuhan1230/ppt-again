@@ -5,6 +5,8 @@ import {diagnostic} from './model.mjs';
 import {readChartDeclarations} from './chart-input.mjs';
 import {chartText} from './charts.mjs';
 import {readEmbeddedSlideData} from './embedded-slide-data.mjs';
+import {validInlinePresetVector,recoverPresetVector} from './preset-vector.mjs';
+import {validTransition} from './transitions.mjs';
 
 export const attribute = (node, name) => node.attrs?.find(a => a.name === name)?.value;
 export function* walkHtml(node) { yield node; for (const child of node.childNodes ?? []) yield* walkHtml(child); }
@@ -59,13 +61,15 @@ export async function readInput({html, assets: provided = [], slideSelector = nu
       cssTree.walk(ast,function(n){
         if(n.type==='Atrule'&&n.name.toLowerCase()==='import')fail('UNSUPPORTED_OBJECT','CSS @import는 제공된 단일 스타일시트로 합쳐 주세요.',loc);
         if(n.type==='Atrule'&&n.name.toLowerCase()==='font-face') {
-          const declarations={},assetIds=[];let hasLocal=false;
+          const declarations={},assetIds=[],localNames=[];let hasLocal=false;
           n.block?.children.forEach(d=>{if(d.type==='Declaration')declarations[d.property.toLowerCase()]=cssTree.generate(d.value);});
           cssTree.walk(n,child=>{
-            if(child.type==='Function'&&child.name.toLowerCase()==='local')hasLocal=true;
+            if(child.type==='Function'&&child.name.toLowerCase()==='local'){hasLocal=true;const args=child.children?.toArray()??[];if(args.length===1&&args[0].type==='String')localNames.push(args[0].value);}
             if(child.type==='Url'){const asset=addAsset(child.value,loc,'font',basePath);if(asset&&!assetIds.includes(asset.id))assetIds.push(asset.id);}
           });
-          input.fontFaces.push({family:(declarations['font-family']??'').replace(/^["']|["']$/g,''),weight:declarations['font-weight']??'normal',style:declarations['font-style']??'normal',
+          const family=(declarations['font-family']??'').replace(/^["']|["']$/g,''),weight=declarations['font-weight']??'normal',style=declarations['font-style']??'normal';
+          const selfLocal=localNames.length===1&&localNames[0]===family&&declarations.src===`local(${JSON.stringify(family)})`&&assetIds.length===0&&['normal','400'].includes(weight)&&style==='normal'&&Object.keys(declarations).every(k=>['font-family','src','font-weight','font-style'].includes(k));
+          input.fontFaces.push({family,weight,style,selfLocal,
             unicodeRange:declarations['unicode-range']??null,stretch:declarations['font-stretch']??'normal',hasLocal,assetIds,
             adjusted:['size-adjust','ascent-override','descent-override','line-gap-override'].some(key=>key in declarations),css:cssTree.generate(n),...loc});
           return this.skip;
@@ -115,6 +119,12 @@ export async function readInput({html, assets: provided = [], slideSelector = nu
   }
   for(const n of nodes) {
     if(insideChart(n))continue; // The chart display is regenerated from its JSON, never reused.
+    if(attribute(n,'data-pptx-transition')!==undefined){try{if(n.tagName!=='section'||attribute(n,'data-slide')===undefined||!validTransition(JSON.parse(attribute(n,'data-pptx-transition'))))throw new Error();}catch{fail('INPUT_INVALID','화면 전환 설정이 올바르지 않습니다.',location(n));}}
+    if(n.tagName==='svg'&&attribute(n,'data-preset-vector')!==undefined&&!validInlinePresetVector(n))fail('INPUT_INVALID','SVG 도형의 경로, 숫자 또는 색상이 지원 범위를 벗어났습니다.',location(n));
+    if(generated&&n.tagName==='svg'&&attribute(n,'data-pptx-vector')!==undefined){
+      const vector=recoverPresetVector(n);let parent=n.parentNode;while(parent&&attribute(parent,'data-slide')===undefined)parent=parent.parentNode;
+      if(vector&&parent){input.presetVectors??=[];input.presetVectors.push({slideId:attribute(parent,'data-slide-id'),nodeId:attribute(n,'data-source-id'),vector});}
+    }
     if(n.tagName==='style')scanCss(nodeText(n),location(n));
     if(n.tagName==='link'&&attribute(n,'rel')?.toLowerCase().split(/\s+/).includes('stylesheet')) {
       const a=addAsset(attribute(n,'href'),location(n),'stylesheet');if(a)scanCss(Buffer.from(a.bytes).toString('utf8'),location(n),a.path);
