@@ -26,5 +26,7 @@ desktop.ini
 examples/
 *.html
 !web/html-to-pptx/index.html
+!docs/architecture/architecture.html
+!docs/architecture/conversion-flows.html
 *.pptm
 *.ppsx

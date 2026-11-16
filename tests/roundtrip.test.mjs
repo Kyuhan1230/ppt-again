@@ -107,13 +107,15 @@ test('PPT text margins survive the round trip without swapping top and left',asy
   const html=exportHtml(read.model),out=await exportPptx(await measure(html.html));
   assert.equal(out.status,'generated',JSON.stringify(out.diagnostics));
   const actual=(await inspectPptxIndependently(out.pptxBytes)).slides[0].objects[0].bodyPr;
-  assert.deepEqual([actual.tIns,actual.rIns,actual.bIns,actual.lIns],['76200','152400','228600','304800']);
+  const expected=(await inspectPptxIndependently(bytes)).slides[0].objects[0].bodyPr;
+  assert.deepEqual([actual.tIns,actual.rIns,actual.bIns,actual.lIns],[expected.tIns,expected.rIns,expected.bIns,expected.lIns]);
 });
 
 test('unsupported master artwork cannot disappear from a successful reverse conversion',async()=>{
   const {readPptx}=await roundtripApi(),parts=unzipSync(await nativeFixture());
   const slide=strFromU8(parts['ppt/slides/slide1.xml']),shape=slide.match(/<p:sp>.*?<\/p:sp>/s)[0];
-  parts['ppt/slideMasters/slideMaster1.xml']=strToU8(strFromU8(parts['ppt/slideMasters/slideMaster1.xml']).replace('</p:spTree>',shape+'</p:spTree>'));
+  const unsupported=shape.replace('</p:spPr>','<a:gradFill/></p:spPr>');
+  parts['ppt/slideMasters/slideMaster1.xml']=strToU8(strFromU8(parts['ppt/slideMasters/slideMaster1.xml']).replace('</p:spTree>',unsupported+'</p:spTree>'));
   const r=await readPptx(zipSync(parts));assert.equal(r.status,'failed');assert.ok(r.diagnostics.some(d=>d.code==='UNSUPPORTED_OBJECT'));
 });
 
@@ -149,13 +151,13 @@ test('visible edits inside unsupported generated shape content cannot be discard
   const result=await exportPptx(await measure(edited));assert.equal(result.status,'failed');
 });
 
-test('PPT unsupported text rotation, strike and theme fill are diagnosed rather than lost',async()=>{
+test('PPT unsupported text rotation, strike and complex theme fill are diagnosed rather than lost',async()=>{
   const {readPptx}=await roundtripApi(),original=unzipSync(await nativeFixture());
   for(const mode of ['rotation','strike','theme']){
     const parts={...original};let xml=strFromU8(parts['ppt/slides/slide1.xml']);
     if(mode==='rotation')xml=xml.replace(/<a:bodyPr[^>]*>/,s=>s.replace(/ rot="[^"]*"/g,'').replace('>',' rot="5400000">'));
     if(mode==='strike')xml=xml.replace('<a:rPr ','<a:rPr strike="sngStrike" ');
-    if(mode==='theme')xml=xml.replace(/<p:spPr>([\s\S]*?)<\/p:spPr>/,(_,s)=>'<p:spPr>'+s.replace(/<a:noFill\s*\/>|<a:solidFill>[\s\S]*?<\/a:solidFill>/g,'')+'</p:spPr><p:style><a:fillRef idx="1"><a:schemeClr val="accent1"/></a:fillRef></p:style>');
+    if(mode==='theme')xml=xml.replace(/<p:spPr>([\s\S]*?)<\/p:spPr>/,(_,s)=>'<p:spPr>'+s.replace(/<a:noFill\s*\/>|<a:solidFill>[\s\S]*?<\/a:solidFill>/g,'')+'</p:spPr><p:style><a:fillRef idx="99"><a:schemeClr val="accent1"/></a:fillRef></p:style>');
     parts['ppt/slides/slide1.xml']=strToU8(xml);const r=await readPptx(zipSync(parts));assert.equal(r.status,'failed',mode);
   }
 });

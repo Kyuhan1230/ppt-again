@@ -2,11 +2,13 @@ import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
+import {randomUUID} from 'node:crypto';
 import {createJobStore} from './job-store.mjs';
 import {createSessionManager} from './session.mjs';
 import {runConversion} from './job-runner.mjs';
 import {diagnostic} from './model.mjs';
 import {publicDiagnostic} from './public-diagnostics.mjs';
+import {writeErrorLog} from './error-log.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const json=(res,status,data)=>{if(res.destroyed)return;res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});res.end(JSON.stringify(data));};
 const pptxMime='application/vnd.openxmlformats-officedocument.presentationml.presentation';
@@ -45,7 +47,7 @@ export function summarizeJob(job,{developmentReports=false}={}) {
     slides:measured.model?.slides.map((s,i)=>({id:developmentReports?s.id:`slide-${i+1}`,number:i+1,widthCssPx:s.widthCssPx,heightCssPx:s.heightCssPx,objectCount:s.nodes.filter(n=>n.kind!=='group').length,
       previewUrl:measured.previews.some(p=>p.slideId===s.id)?`/api/jobs/${job.id}/preview/${i+1}.png`:null}))??[]};
 }
-export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes=96*1024*1024,developmentReports=false,jobTtlMs=1800000,maxJobBytes=268435456,conversionLimits={}}={}) {
+export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes=96*1024*1024,developmentReports=false,jobTtlMs=1800000,maxJobBytes=268435456,conversionLimits={},errorLogger=writeErrorLog}={}) {
   if(host!=='127.0.0.1')throw new Error('HTML 입력 서버는 로컬 루프백에서만 실행합니다.');
   const serveDev=developmentReports?(await import('./dev-reports.mjs')).serveDevelopmentRoute:null;
   const summarize=job=>summarizeJob(job,{developmentReports});
@@ -54,6 +56,8 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
   const missing=res=>json(res,404,{error:'결과가 없거나 만료됐습니다. 다시 분석해 주세요.'});
   let active=0,url;
   const server=http.createServer(async(req,res)=>{
+    const requestId=randomUUID();
+    let logContext={operation:'http',requestId};
     try {
       if(req.headers.host!==new URL(url).host)return json(res,403,{error:'허용되지 않은 호스트입니다.'});
       if(req.headers.origin&&req.headers.origin!==url)return json(res,403,{error:'같은 로컬 화면에서 요청해 주세요.'});
@@ -72,23 +76,32 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
           const targetType=sourceType==='html'?'pptx':'html';let input;
           if(sourceType==='pptx'){
             if(body.html!==undefined||body.assets!==undefined||body.slideSelector!==undefined||body.fileName!==undefined&&(typeof body.fileName!=='string'||!/\.pptx$/i.test(body.fileName)))return json(res,400,{error:'PPTX 파일 하나를 선택해 주세요.'});
-            input=decodeBase64(body.pptxBase64,64*1024*1024);
+            const options=body.pptxOptions===undefined?{}:body.pptxOptions;
+            if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(k=>!['fontPolicy','allowPartial'].includes(k))||options.fontPolicy!==undefined&&!['original','malgun-gothic','pretendard'].includes(options.fontPolicy)||options.allowPartial!==undefined&&typeof options.allowPartial!=='boolean')return json(res,400,{error:'PPTX 글꼴과 부분 변환 설정을 확인해 주세요.'});
+            input={bytes:decodeBase64(body.pptxBase64,64*1024*1024),options:{fontPolicy:options.fontPolicy??'original',allowPartial:options.allowPartial??false}};
           }else{
-            if(body.pptxBase64!==undefined)return json(res,400,{error:'HTML과 PPTX를 한 번에 입력할 수 없습니다.'});
+            if(body.pptxBase64!==undefined||body.pptxOptions!==undefined)return json(res,400,{error:'HTML과 PPTX를 한 번에 입력할 수 없습니다.'});
             if(body.assets!==undefined&&!Array.isArray(body.assets))return json(res,400,{error:'자산 목록은 배열이어야 합니다.'});
             const assets=(body.assets??[]).map(a=>({path:a?.path,mime:a?.mime||undefined,bytes:decodeBase64(a?.base64,16*1024*1024)}));
             input={html:body.html,assets,slideSelector:body.slideSelector??null,allowTableOverlay:true};
           }
           const abortController=new AbortController();
           const id=jobs.create(ownerId,{direction:`${sourceType}-to-${targetType}`,sourceType,targetType,fileName:typeof body.fileName==='string'?body.fileName.slice(0,200):(sourceType==='pptx'?'입력.pptx':'입력 HTML'),input,abortController});
+          const operation=sourceType==='pptx'?'analyze-pptx':'analyze-html';
+          const inputBytes=sourceType==='pptx'?input.bytes.byteLength:typeof input.html==='string'?Buffer.byteLength(input.html):undefined;
+          logContext={operation,requestId,jobId:id,sourceType,targetType,inputBytes};
           const disconnected=()=>{if(!res.writableEnded)abortController.abort();};res.on('close',disconnected);
           try{
-            const pending=runConversion({input,operation:sourceType==='pptx'?'analyze-pptx':'analyze-html',signal:abortController.signal,limits:conversionLimits});
+            const pending=runConversion({input,operation,signal:abortController.signal,limits:conversionLimits});
             if(!jobs.update(ownerId,id,{pending})){abortController.abort();await pending.catch(()=>{});return missing(res);}
             const result=await pending;
             if(abortController.signal.aborted||!jobs.update(ownerId,id,{input:result.input,measured:result.measured,resourceUsage:result.resourceUsage,pending:null}))return missing(res);
             const saved=jobs.get(ownerId,id);if(!saved)return missing(res);
-            const summary=summarize(saved);return json(res,summary.status==='failed'?422:200,summary);
+            const summary=summarize(saved),statusCode=summary.status==='failed'?422:200;
+            const {diagnostics,model}=result.measured;
+            const failures=statusCode===422?diagnostics:diagnostics.filter(item=>item.code==='PPTX_PREVIEW_UNAVAILABLE');
+            if(failures.length)await errorLogger({...logContext,operation:statusCode===422?operation:'preview-pptx',statusCode,diagnostics:failures,slides:model?.slides,resourceUsage:result.resourceUsage});
+            return json(res,statusCode,summary);
           }catch(error){await jobs.delete(ownerId,id);throw error;}
           finally{res.off('close',disconnected);}
         }finally{active--;}
@@ -108,17 +121,21 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
         if(active>=2)return json(res,429,{error:'다른 장표를 처리 중입니다. 잠시 뒤 다시 실행해 주세요.'});
         active++;
         const abortController=new AbortController(),disconnected=()=>{if(!res.writableEnded)abortController.abort();};res.on('close',disconnected);
+        const operation=target==='html'?'export-html':'export-pptx';
+        logContext={operation,requestId,jobId:job.id,sourceType:job.sourceType,targetType:target};
         try{
           if(!jobs.update(ownerId,job.id,{exporting:true,abortController}))return missing(res);
           const {previews,...whole}=job.measured;
           const ids=partial?new Set(partial.included.map(s=>s.id)):null;
           const measured=partial?{...whole,model:{...whole.model,slides:partial.included},measurements:whole.measurements.filter(m=>ids.has(m.slideId)),diagnostics:whole.diagnostics.filter(d=>d.severity!=='error'&&(!d.slideId||ids.has(d.slideId)))}:whole;
-          const pending=runConversion({input:target==='html'?measured.model:measured,operation:target==='html'?'export-html':'export-pptx',signal:abortController.signal,limits:conversionLimits});
+          const pending=runConversion({input:target==='html'?measured.model:measured,operation,signal:abortController.signal,limits:conversionLimits});
           if(!jobs.update(ownerId,job.id,{pending})){abortController.abort();await pending.catch(()=>{});return missing(res);}
           const exportResult=await pending;
           exportResult.diagnostics=[...new Map([...whole.diagnostics,...exportResult.diagnostics].map(d=>[JSON.stringify(d),d])).values()];
           if(abortController.signal.aborted||!jobs.update(ownerId,body.jobId,{exportResult,partialExport:Boolean(partial),exporting:false,pending:null}))return missing(res);
-          return json(res,exportResult.status==='generated'?200:422,summarize(job));
+          const statusCode=exportResult.status==='generated'?200:422,summary=summarize(job);
+          if(statusCode===422)await errorLogger({...logContext,statusCode,diagnostics:exportResult.diagnostics,slides:measured.model.slides,resourceUsage:exportResult.resourceUsage});
+          return json(res,statusCode,summary);
         }catch(error){await jobs.delete(ownerId,body.jobId);throw error;}
         finally{res.off('close',disconnected);active--;}
       }
@@ -143,7 +160,7 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
         const preview=/^\/api\/jobs\/([a-f0-9-]+)\/preview\/(\d+)\.png$/.exec(route);
         if(preview){const j=jobs.get(ownerId,preview[1]);if(!j)return missing(res);const s=j.measured?.model?.slides[Number(preview[2])-1],image=j.measured?.previews.find(p=>p.slideId===s?.id);if(!image)return missing(res);res.writeHead(200,{'content-type':'image/png','cache-control':'no-store','x-content-type-options':'nosniff'});return res.end(Buffer.from(image.bytes));}
         if(jobRoute){const j=jobs.get(ownerId,jobRoute[1]);return j?json(res,200,summarize(j)):missing(res);}
-        const relative={'/':'web/html-to-pptx/index.html','/app.js':'web/html-to-pptx/app.js','/style.css':'web/html-to-pptx/style.css'}[route];
+        const relative={'/':'web/html-to-pptx/index.html','/app.js':'web/html-to-pptx/app.js','/input-policy.js':'web/html-to-pptx/input-policy.js','/diagnostic-view.js':'web/html-to-pptx/diagnostic-view.js','/style.css':'web/html-to-pptx/style.css'}[route];
         if(typeof relative==='string'){
           const file=path.join(root,relative),bytes=await fs.readFile(file);
           res.writeHead(200,{'content-type':mime[path.extname(file)],'x-content-type-options':'nosniff','cache-control':'no-store','Content-Security-Policy':"default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"});return res.end(bytes);
@@ -152,12 +169,18 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
       return json(res,404,{error:'요청한 경로를 찾을 수 없습니다.'});
     }catch(e){
       const status=[400,408,409,413,429].includes(e.statusCode)?e.statusCode:500;
+      await errorLogger({...logContext,statusCode:status,error:e,resourceUsage:e.resourceUsage});
       const messages={JOB_TIMEOUT:'처리 시간을 초과해 작업을 중단했습니다. 파일을 확인한 뒤 다시 시도해 주세요.',JOB_CANCELLED:'작업을 취소했습니다.',JOB_MEMORY_LIMIT:'작업 메모리 기준을 초과해 중단했습니다.',JOB_BUSY:'다른 장표를 처리 중입니다. 잠시 뒤 다시 실행해 주세요.'};
       const message=messages[e.code]??(status===429?'보관 가능한 작업 용량을 초과했습니다. 이전 작업을 지운 뒤 다시 시도해 주세요.':status===413?'입력 크기 제한을 초과했습니다.':status===400?'올바른 입력이 필요합니다.':'분석 중 오류가 발생했습니다. 파일을 확인한 뒤 다시 시도해 주세요.');
       if(!res.headersSent)json(res,status,{error:message,diagnostics:[developmentReports?diagnostic('RENDER_INCOMPLETE',e.message):publicDiagnostic({code:'RENDER_INCOMPLETE'})]});else res.end();
     }
   });
-  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,host,resolve);});
+  try{
+    await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,host,resolve);});
+  }catch(error){
+    await errorLogger({operation:'server-start',error});
+    throw error;
+  }
   url=`http://${host}:${server.address().port}`;
   let closing;
   return {url,jobs,close:()=>closing??=(async()=>{const stopped=new Promise(resolve=>server.close(resolve));await jobs.close();server.closeAllConnections();await stopped;})()};

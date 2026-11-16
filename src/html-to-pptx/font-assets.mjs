@@ -35,6 +35,7 @@ export function collectFontAssets(input,model){
         resolved.set(key,null);
         const matchingFamily=declared.filter(face=>familyKey(face.family)===familyKey(family));
         if(!matchingFamily.length)continue;
+        if(matchingFamily.every(face=>face.selfLocal===true))continue;
         const supplied=matchingFamily.flatMap(face=>face.assetIds??[]).map(id=>assets.get(id)).filter(Boolean);
         // ponytail: webfont normalization is F01.3. Keep the existing verified
         // installed-font mapping usable, without claiming these bytes embed.
