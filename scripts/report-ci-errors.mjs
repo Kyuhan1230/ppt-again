@@ -21,4 +21,5 @@ for(const name of names){
     records.push({statusCode:row.statusCode,...(safeError(row.error)?{error:safeError(row.error)}:{}),resourceUsage,diagnostics});
   }
 }
-console.log(JSON.stringify({message:'Sanitized CI error summaries',records:records.slice(-100)}));
+const critical=records.filter(row=>row.statusCode>=500||row.diagnostics.some(item=>item.code==='RENDER_INCOMPLETE'));
+console.log(JSON.stringify({message:'Sanitized CI error summaries',critical:critical.slice(-100),recent:records.slice(-30)}));
