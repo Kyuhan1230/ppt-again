@@ -71,13 +71,12 @@ export async function inspectInput(input,runtime,{viewport={width:1280,height:96
       if(!indexes.length||indexes.length>200)return 'too-many-slides';
       const rs=indexes.map(i=>observed.regions[i]);
       if(rs.some(r=>!r?.bounds||r.visibility==='hidden'||r.visibility==='unmeasured'))return 'hidden-or-unmeasured';
-      if(rs.some(r=>!r.fixed))return 'size-not-fixed';
+      if(rs.some(r=>r.transformed))return 'root-appearance-not-supported';
       if(rs.some(r=>r.rootSizeMismatch))return 'root-size-mismatch';
       if(rs.some(r=>r.rootAppearance))return 'root-appearance-not-supported';
       if(rs.some(r=>r.ancestorAppearance))return 'ancestor-appearance-not-supported';
       if(rs.some(r=>r.externalOverlap||r.externalComplex))return 'external-overlay-not-supported';
       if(rs.some(r=>r.bounds.width>8192||r.bounds.height>8192||r.bounds.width*r.bounds.height>8000000)||rs.reduce((sum,r)=>sum+r.bounds.width*r.bounds.height,0)>32000000)return 'selection-too-large';
-      if(rs.some(r=>Math.abs(r.bounds.width-rs[0].bounds.width)>.01||Math.abs(r.bounds.height-rs[0].bounds.height)>.01))return 'different-sizes';
       if(rs.some((r,i)=>rs.some((other,j)=>i!==j&&(r.overlaps.includes(other.index)||other.parent===r.index||r.parent===other.index))))return 'overlap-or-nesting';
       return null;
     };
@@ -113,8 +112,8 @@ export async function inspectInput(input,runtime,{viewport={width:1280,height:96
     const root=observed.documentRoot;
     if(input.profile!=='static-slides-v1')documentChoice.reasons=['profile-not-supported'];
     else if(observed.uncertainties.some(reason=>['layout-may-change','resource-not-ready','render-pixels-not-fully-observed'].includes(reason)))documentChoice.reasons=['inspection-incomplete'];
-    else if(!root.fixed)documentChoice.reasons=['document-size-not-fixed'];
     else if(root.rootSizeMismatch)documentChoice.reasons=['root-size-mismatch'];
+    else if(root.transformed)documentChoice.reasons=['root-appearance-not-supported'];
     else if(root.rootAppearance)documentChoice.reasons=['root-appearance-not-supported'];
     else if(root.ancestorAppearance)documentChoice.reasons=['ancestor-appearance-not-supported'];
     else if(!['x','y','width','height'].every(k=>Math.abs(root.bounds[k]-bounds[k])<.01))documentChoice.reasons=['document-bounds-do-not-match'];

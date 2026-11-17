@@ -10,6 +10,20 @@ async function measureSvgPage({paths,timeoutMs,fragments=false,selector='[data-s
   const wait=p=>Promise.race([p,new Promise((_,reject)=>setTimeout(()=>reject(new Error('SVG resource timeout')),timeoutMs))]);
   await wait(document.fonts.ready);
   const roots=[...document.querySelectorAll('svg')].filter(e=>paths.includes(e.dataset.sourcePath));
+  // Record the original paint before cloning the SVG into a neutral document.
+  // A transparent root over a painted ancestor cannot be reconstructed from
+  // the SVG viewBox alone, so fail rather than silently replacing that paint.
+  const slideBackgrounds=fragments?[]:roots.map(root=>{
+    const st=getComputedStyle(root),color=st.backgroundColor,transparent=color==='transparent'||/^rgba\([^)]*[, /]0(?:\.0+)?\)$/.test(color),v=root.viewBox.baseVal,r=root.getBoundingClientRect();
+    const invalid=st.backgroundImage!=='none'||st.boxShadow!=='none'||Number(st.opacity)!==1||['Top','Right','Bottom','Left'].some(side=>parseFloat(st[`border${side}Width`])>0||parseFloat(st[`padding${side}`])>0)||['TopLeft','TopRight','BottomRight','BottomLeft'].some(corner=>parseFloat(st[`border${corner}Radius`])>0);
+    if(invalid||!transparent&&(!/^rgb\(/.test(color)||!r.height||Math.abs(r.width/r.height-v.width/v.height)>.001))issue('SVG 루트의 배경·테두리·크기를 안전하게 보존할 수 없습니다.');
+    for(let parent=root.parentElement;parent;parent=parent.parentElement){
+      const ps=getComputedStyle(parent),pc=ps.backgroundColor,clear=pc==='transparent'||/^rgba\([^)]*[, /]0(?:\.0+)?\)$/.test(pc);
+      if(ps.display==='none'||ps.visibility!=='visible'||Number(ps.opacity)!==1||ps.transform!=='none'||ps.filter!=='none'||ps.maskImage!=='none'||ps.clipPath!=='none'||ps.mixBlendMode!=='normal'){issue('SVG 부모의 숨김·변환·합성 효과는 안전하게 보존할 수 없습니다.');break;}
+      if(transparent&&(!clear||ps.backgroundImage!=='none')){issue('투명 SVG 뒤의 부모 배경은 장표 배경으로 안전하게 보존할 수 없습니다.');break;}
+    }
+    return transparent?'#ffffff':color;
+  });
   if(fragments)for(const root of roots){
     const st=getComputedStyle(root),visibleBackground=st.backgroundColor!=='rgba(0, 0, 0, 0)'&&st.backgroundColor!=='transparent';
     if(visibleBackground||st.backgroundImage!=='none'||st.boxShadow!=='none'||['Top','Right','Bottom','Left'].some(side=>parseFloat(st[`border${side}Width`])>0||parseFloat(st[`padding${side}`])>0))issue('SVG 루트의 CSS 배경·테두리·여백·그림자는 아직 함께 변환할 수 없습니다.');
@@ -58,6 +72,8 @@ async function measureSvgPage({paths,timeoutMs,fragments=false,selector='[data-s
     copies.forEach((copy,i)=>{
       const v=copy.viewBox.baseVal,scale=1280/Math.max(v.width,v.height);copy.dataset.measuredSvg=String(i);
       copy.style.cssText+=`;display:block!important;position:relative!important;left:0!important;top:0!important;margin:0!important;padding:0!important;border:0!important;transform:none!important;overflow:hidden!important;width:${Math.round(v.width*scale)}px!important;height:${Math.round(v.height*scale)}px!important;`;
+      copy.style.setProperty('background-color',slideBackgrounds[i],'important');
+      copy.style.setProperty('background-image','none','important');
       document.body.append(copy);
     });
   }
@@ -73,7 +89,6 @@ async function measureSvgPage({paths,timeoutMs,fragments=false,selector='[data-s
     const slot=fragments?slots.find(s=>s.path===root.dataset.sourcePath):null,slideRoot=fragments?root.closest(selector):null;
     if(fragments&&(!slot||!slideRoot)){issue('SVG가 속한 장표를 찾을 수 없습니다.');continue;}
     const id=slot?.slideId??`slide-${slideIndex+1}`,v=fragments?{x:0,y:0}:root.viewBox.baseVal,width=fragments?parseFloat(getComputedStyle(slideRoot).width):v.width,height=fragments?parseFloat(getComputedStyle(slideRoot).height):v.height,renderScale=slot?.renderScale??1280/Math.max(width,height),nodes=[],objects=[];
-    if(!fragments&&slides.length&&(slides[0].widthCssPx!==width||slides[0].heightCssPx!==height))issue('한 PPT 안의 서로 다른 장표 크기는 지원하지 않습니다.',id);
     const rr=slideRoot?.getBoundingClientRect(),slideMatrix=fragments?new DOMMatrix([1/renderScale,0,0,1/renderScale,-rr.x/renderScale,-rr.y/renderScale]):null;
     const bounds=fragments?root.getBoundingClientRect():null,svgBox=fragments?{x:(bounds.x-rr.x)/renderScale,y:(bounds.y-rr.y)/renderScale,w:bounds.width/renderScale,h:bounds.height/renderScale}:null,rootStyle=getComputedStyle(root);
     const matrix=el=>fragments?slideMatrix.multiply(el.getScreenCTM()):root.getScreenCTM().inverse().multiply(el.getScreenCTM()),point=(m,x,y)=>({x:round(m.a*x+m.c*y+m.e-v.x),y:round(m.b*x+m.d*y+m.f-v.y)});
@@ -275,7 +290,7 @@ async function measureSvgPage({paths,timeoutMs,fragments=false,selector='[data-s
       objects.push({nodeId,kind,boxCssPx:b,...measurement});
     }
     for(const [g,gid] of groupIds){const children=nodes.filter(n=>n.parentId===gid);if(!children.length)continue;const x=Math.min(...children.map(n=>n.boxCssPx.x)),y=Math.min(...children.map(n=>n.boxCssPx.y));nodes.push({id:gid,kind:'group',boxCssPx:{x,y,w:Math.max(1,Math.max(...children.map(n=>n.boxCssPx.x+n.boxCssPx.w))-x),h:Math.max(1,Math.max(...children.map(n=>n.boxCssPx.y+n.boxCssPx.h))-y)},zOrder:children[0].zOrder,content:{},style:{},sourceRef:{slideId:id,path:g.dataset.sourcePath},parentId:null});if(g.querySelector('g'))issue('중첩 SVG 그룹은 상위 그룹 한 개로 묶었습니다.',id,gid,'warning');}
-    slides.push({id,...(fragments?{svgPath:root.dataset.sourcePath}:{}),widthCssPx:width,heightCssPx:height,background:{color:'#ffffff',image:'none'},nodes});
+    slides.push({id,...(fragments?{svgPath:root.dataset.sourcePath}:{}),widthCssPx:width,heightCssPx:height,background:{color:fragments?'#ffffff':slideBackgrounds[slideIndex],image:'none'},nodes});
     measurements.push({slideId:id,referenceSize:{width:Math.round(width*renderScale),height:Math.round(height*renderScale)},renderScale,sourceTransformScale:1,layoutStable:false,fontsReady:[...fonts.values()].every(f=>f.available),assetsReady:true,objects});
   }
   const layoutSnapshot=[...document.querySelectorAll('[data-measured-svg], [data-measured-svg] *')].map(e=>{const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height];});
@@ -305,7 +320,7 @@ export async function measureSvgInput(input,runtime,session,result){
   for(const font of measured.fonts)if(!font.available)result.diagnostics.push(diagnostic('FONT_UNAVAILABLE',`글꼴을 사용할 수 없습니다: ${font.family}`));
   const validation=validateModel(result.model);for(const e of validation.errors)result.diagnostics.push(diagnostic('INPUT_INVALID',`${e.path}: ${e.message}`));
   if(runtime.capture&&!result.diagnostics.some(d=>d.severity==='error'))for(const [index,m] of measured.measurements.entries()){
-    await session.page.setViewportSize(m.referenceSize);const bytes=await session.page.locator(`[data-measured-svg="${index}"]`).screenshot({animations:'disabled',scale:'css'});
+    const bytes=await session.page.locator(`[data-measured-svg="${index}"]`).screenshot({animations:'disabled',scale:'css'});
     if(bytes.readUInt32BE(16)!==m.referenceSize.width||bytes.readUInt32BE(20)!==m.referenceSize.height)result.diagnostics.push(diagnostic('RENDER_INCOMPLETE','SVG 캡처 크기가 기준 화면 크기와 다릅니다.',{slideId:m.slideId}));
     else result.previews.push({slideId:m.slideId,bytes:new Uint8Array(bytes),...m.referenceSize});
   }

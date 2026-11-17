@@ -236,14 +236,16 @@ test('nondefault document root background is not silently excluded',async()=>{
   assert.ok(measured.diagnostics.some(d=>d.code==='SLIDE_CONTENT_OUTSIDE'||d.code==='SLIDE_CONTENT_UNOBSERVED'),JSON.stringify(measured.diagnostics));
 });
 
-test('outside generated content is checked in both initial and conversion viewports',async()=>{
+test('outside generated content is checked in the selected viewport',async()=>{
   const slide='<div id="slide" style="width:400px;height:600px;background:white">CARD</div>';
-  for(const media of ['@media(max-width:1000px){aside::before{content:none}}','@media(min-width:1001px){aside::before{content:none}}']){
+  for(const [media,visibleAtWide] of [['@media(max-width:1000px){aside::before{content:none}}',true],['@media(min-width:1001px){aside::before{content:none}}',false]]){
     const html=`<style>aside::before{content:"OUTSIDE"}${media}</style><body style="margin:0">${slide}<aside></aside></body>`;
     const automatic=await inspect(html,null);
     assert.ok(automatic.diagnostics.some(d=>d.code==='SELECTION_REQUIRED'&&d.severity==='error'),JSON.stringify(automatic.diagnostics));
-    const explicit=await inspect(html,'#slide');
-    assert.ok(outside(explicit).some(d=>d.severity==='warning'),JSON.stringify(explicit.diagnostics));
+    for(const [width,expected] of [[1280,visibleAtWide],[800,!visibleAtWide]]){
+      const explicit=await measureInput(await readInput({html,slideSelector:'#slide'}),runtime,{viewport:{width,height:960}});
+      assert.equal(outside(explicit).some(d=>d.severity==='warning'),expected,JSON.stringify(explicit.diagnostics));
+    }
   }
 });
 

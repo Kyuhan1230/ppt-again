@@ -9,6 +9,7 @@ import {runConversion} from './job-runner.mjs';
 import {diagnostic} from './model.mjs';
 import {publicDiagnostic} from './public-diagnostics.mjs';
 import {writeErrorLog} from './error-log.mjs';
+import {validSizePolicy} from './size-policy-input.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const json=(res,status,data)=>{if(res.destroyed)return;res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});res.end(JSON.stringify(data));};
 const pptxMime='application/vnd.openxmlformats-officedocument.presentationml.presentation';
@@ -39,7 +40,13 @@ export function summarizeJob(job,{developmentReports=false}={}) {
   if(!job.measured)return {id:job.id,sourceType,targetType,status:'analyzing',exportAvailable:false,diagnostics:[],slides:[]};
   const measured=job.measured,failed=measured.diagnostics.some(d=>d.severity==='error');
   const diagnostics=job.exportResult?.diagnostics??measured.diagnostics,partial=partialSlides(job);
+  const policy=measured.sizePolicy;
+  const safePolicy=policy&&policy.targetWidthEmu!==undefined&&policy.targetHeightEmu!==undefined&&validSizePolicy({mode:policy.mode,targetWidthEmu:policy.targetWidthEmu,targetHeightEmu:policy.targetHeightEmu,marginColor:policy.marginColor})&&['original','first-slide','custom'].includes(policy.source)?{
+    mode:'contain',targetWidthEmu:policy.targetWidthEmu,targetHeightEmu:policy.targetHeightEmu,marginColor:policy.marginColor,source:policy.source,...(policy.originalAspectMismatch===true?{originalAspectMismatch:true}:{}),
+    slides:(Array.isArray(policy.slides)?policy.slides:[]).map((item,i)=>({slideId:`slide-${i+1}`,...Object.fromEntries(['sourceWidth','sourceHeight','scale','physicalScale','offsetX','offsetY','offsetXEmu','offsetYEmu'].filter(key=>Number.isFinite(item?.[key])).map(key=>[key,item[key]]))}))
+  }:null;
   return {id:job.id,fileName:job.fileName,sourceType,targetType,status:failed?'failed':'analyzed',profile:job.input.profile,sourceDigest:job.input.source.sha256,
+    ...(safePolicy?{sizePolicy:safePolicy}:{}),...(measured.environment?.previewKind==='source'?{previewKind:'source'}:{}),
     slideCount:measured.model?.slides.length??0,objectCount:measured.model?.slides.flatMap(s=>s.nodes).filter(n=>n.kind!=='group').length??0,
     diagnostics:developmentReports?diagnostics:diagnostics.map(d=>publicDiagnostic(d,measured.model?.slides)),exportAvailable:!failed&&!job.exporting,partialExportAvailable:Boolean(partial&&!job.exporting),partialSlideCount:partial?.included.length??0,excludedSlideNumbers:partial?.excludedSlideNumbers??[],downloadSlideCount:job.partialExport?partial?.included.length??0:measured.model?.slides.length??0,visualQuality:'unmeasured',
     exportStatus:job.exporting?'converting':job.exportResult?.status??'pending',
@@ -112,9 +119,9 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
         active++;
         try{
           const body=await readBody(req,maxBodyBytes);
-          if(!body||typeof body!=='object'||Array.isArray(body)||typeof body.html!=='string'||body.assets!==undefined&&!Array.isArray(body.assets)||Object.keys(body).some(k=>!['html','assets','fileName','slideSelector','viewport'].includes(k)))return json(res,400,{error:'올바른 HTML 입력이 필요합니다.'});
+          if(!body||typeof body!=='object'||Array.isArray(body)||typeof body.html!=='string'||body.assets!==undefined&&!Array.isArray(body.assets)||body.sizePolicy!==undefined&&!validSizePolicy(body.sizePolicy)||Object.keys(body).some(k=>!['html','assets','fileName','slideSelector','viewport','sizePolicy'].includes(k)))return json(res,400,{error:'올바른 HTML 입력과 PPT 크기 설정(각 변 1~56인치)이 필요합니다.'});
           const assets=(body.assets??[]).map(a=>({path:a?.path,mime:a?.mime||undefined,bytes:decodeBase64(a?.base64,16*1024*1024)}));
-          const input={html:body.html,assets,slideSelector:body.slideSelector??null,allowTableOverlay:true,...(body.viewport?{viewport:body.viewport}:{})};
+          const input={html:body.html,assets,slideSelector:body.slideSelector??null,allowTableOverlay:true,...(body.viewport!==undefined?{viewport:body.viewport}:{}),...(body.sizePolicy!==undefined?{sizePolicy:body.sizePolicy}:{})};
           const abortController=clientRequest?.controller??new AbortController(),id=jobs.create(ownerId,{sourceType:'html',targetType:'pptx',fileName:typeof body.fileName==='string'?body.fileName.slice(0,200):'입력 HTML',sourceInput:input,abortController,clientRequestKey});
           if(clientRequest){clientRequest.jobId=id;clientRequest.state='running';}
           if(abortController.signal.aborted){await jobs.delete(ownerId,id);return json(res,409,{code:'JOB_CANCELLED',error:'요청이 취소되었습니다.'});}
@@ -163,15 +170,16 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
           if(!['html','pptx'].includes(sourceType))return json(res,400,{error:'HTML 또는 PPTX 파일이 필요합니다.'});
           const targetType=sourceType==='html'?'pptx':'html';let input;
           if(sourceType==='pptx'){
-            if(body.html!==undefined||body.assets!==undefined||body.slideSelector!==undefined||body.fileName!==undefined&&(typeof body.fileName!=='string'||!/\.pptx$/i.test(body.fileName)))return json(res,400,{error:'PPTX 파일 하나를 선택해 주세요.'});
+            if(body.html!==undefined||body.assets!==undefined||body.slideSelector!==undefined||body.sizePolicy!==undefined||body.viewport!==undefined||body.fileName!==undefined&&(typeof body.fileName!=='string'||!/\.pptx$/i.test(body.fileName)))return json(res,400,{error:'PPTX 파일 하나를 선택해 주세요.'});
             const options=body.pptxOptions===undefined?{}:body.pptxOptions;
             if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(k=>!['fontPolicy','allowPartial'].includes(k))||options.fontPolicy!==undefined&&!['original','malgun-gothic','pretendard'].includes(options.fontPolicy)||options.allowPartial!==undefined&&typeof options.allowPartial!=='boolean')return json(res,400,{error:'PPTX 글꼴과 부분 변환 설정을 확인해 주세요.'});
             input={bytes:decodeBase64(body.pptxBase64,64*1024*1024),options:{fontPolicy:options.fontPolicy??'original',allowPartial:options.allowPartial??false}};
           }else{
             if(body.pptxBase64!==undefined||body.pptxOptions!==undefined)return json(res,400,{error:'HTML과 PPTX를 한 번에 입력할 수 없습니다.'});
+            if(body.sizePolicy!==undefined&&!validSizePolicy(body.sizePolicy))return json(res,400,{error:'PPT 크기는 각 변이 1~56인치여야 합니다. 크기와 여백 설정을 확인해 주세요.'});
             if(body.assets!==undefined&&!Array.isArray(body.assets))return json(res,400,{error:'자산 목록은 배열이어야 합니다.'});
             const assets=(body.assets??[]).map(a=>({path:a?.path,mime:a?.mime||undefined,bytes:decodeBase64(a?.base64,16*1024*1024)}));
-            input={html:body.html,assets,slideSelector:body.slideSelector??null,allowTableOverlay:true};
+            input={html:body.html,assets,slideSelector:body.slideSelector??null,allowTableOverlay:true,...(body.viewport!==undefined?{viewport:body.viewport}:{}),...(body.sizePolicy!==undefined?{sizePolicy:body.sizePolicy}:{})};
           }
           const abortController=clientRequest?.controller??new AbortController();
           const id=jobs.create(ownerId,{direction:`${sourceType}-to-${targetType}`,sourceType,targetType,fileName:typeof body.fileName==='string'?body.fileName.slice(0,200):(sourceType==='pptx'?'입력.pptx':'입력 HTML'),input,abortController,clientRequestKey});

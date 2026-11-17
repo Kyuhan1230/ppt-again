@@ -25,7 +25,7 @@ test('unmarked cards are proposed individually and as a group without being sile
   assert.ok([a,b,c].every(r=>result.choices.some(choice=>choice.scope==='elements'&&choice.regionIds.length===1&&choice.regionIds[0]===r.id)));
   assert.ok(result.choices.every(choice=>Array.isArray(choice.evidence)&&choice.evidence.length));
   assert.equal(result.selectedChoiceId??null,null);
-  assert.equal(choiceFor(result,[a.id,b.id,c.id]).convertible,false,'different page sizes must not be advertised as supported');
+  assert.equal(choiceFor(result,[a.id,b.id,c.id]).convertible,true,'different page sizes can be fitted after an explicit choice');
 });
 
 test('background-only areas remain candidates and text outside them is counted',async()=>{

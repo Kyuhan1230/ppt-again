@@ -129,6 +129,7 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
     const m=measured.measurements.find(m=>m.slideId===slide.id);
     if(!m||m.assetsReady!==true||m.fontsReady!==true||m.layoutStable!==true)issue('RENDER_INCOMPLETE','자산·글꼴·배치의 측정 완료가 필요합니다.',slide);
     if(slide.background?.image&&slide.background.image!=='none'&&!slide.background.assetId)issue('RENDER_INCOMPLETE','장식 배경의 분리된 자산이 없습니다.',slide);
+    if(slide.fitBackground?.background?.image&&slide.fitBackground.background.image!=='none'&&!slide.fitBackground.background.assetId)issue('RENDER_INCOMPLETE','장식 배경의 분리된 자산이 없습니다.',slide);
     for(const {group,message} of groupDiagnostics(slide))issue('UNSUPPORTED_OBJECT',message,slide,group);
     for(const n of slide.nodes){
       if(n.kind==='shape'&&n.style.backgroundImage&&n.style.backgroundImage!=='none'&&!n.style.assetId)issue('RENDER_INCOMPLETE','객체의 분리된 장식 배경 자산이 없습니다.',slide,n);
@@ -176,6 +177,15 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
         objectMap.push({sourceSlideId:source.id,sourceNodeId:name,derivedFrom,sourceRef:sourceRef??{slideId:source.id,path:'background'},pptSlideNumber:index+1,pptObjectId:objectId++,pptObjectName:name,support:'background-art',parentId:null,assetSha256:asset.sha256});
       };
       if(source.background?.assetId)addBackground(source.background.assetId,{x:0,y:0,w:inches(source.widthCssPx),h:inches(source.heightCssPx)},null,null,1,source.background.capture,{w:source.widthCssPx,h:source.heightCssPx});
+      if(source.fitBackground){
+        const {boxCssPx:b,background:bg}=source.fitBackground,box={x:inches(b.x),y:inches(b.y),w:inches(b.w),h:inches(b.h)};
+        if(!(bg?.assetId&&bg.capture?.content==='computed-background-only')){
+          let name=`${source.id}::fitted-background`,suffix=1;while(objectNames.has(name))name=`${source.id}::fitted-background::${suffix++}`;objectNames.add(name);
+          slide.addShape(pptx.ShapeType.rect,{...box,objectName:name,fill:paint(bg?.color??'transparent'),line:{transparency:100}});
+          objectMap.push({sourceSlideId:source.id,sourceNodeId:name,derivedFrom:null,sourceRef:{slideId:source.id,path:'background'},pptSlideNumber:index+1,pptObjectId:objectId++,pptObjectName:name,support:'background-art',parentId:null});
+        }
+        if(bg?.assetId)addBackground(bg.assetId,box,null,null,1,bg.capture,{w:b.w,h:b.h});
+      }
       const writerContext={slide,pptx,source,measured,pointScale,inchScale,inches,paint,resolveTextFont,resolveFont,profile,diagnostics};
       for(const node of [...source.nodes].sort((a,b)=>a.zOrder-b.zOrder)){
         if(node.kind==='group')continue;

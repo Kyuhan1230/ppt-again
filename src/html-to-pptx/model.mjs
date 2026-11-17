@@ -80,6 +80,12 @@ export function validateModel(value) {
       if(slide.animationOmitted!==undefined)check(slide.animationOmitted===true,`${sp}.animationOmitted`,'Invalid animation flag');
       if(slide.transition!==undefined)check(validTransition(slide.transition),`${sp}.transition`,'Invalid slide transition');
       for (const k of ['widthCssPx', 'heightCssPx']) check(Number.isFinite(slide[k]) && slide[k] > 0, `${sp}.${k}`, 'Expected positive finite dimension');
+      if(slide.fitBackground!==undefined){
+        const fit=slide.fitBackground,b=fit?.boxCssPx,bg=fit?.background;
+        check(record(fit)&&record(b)&&record(bg),`${sp}.fitBackground`,'Expected fitted background and bounds');
+        if(record(b))check(['x','y','w','h'].every(k=>Number.isFinite(b[k]))&&b.x>=0&&b.y>=0&&b.w>0&&b.h>0&&b.x+b.w<=slide.widthCssPx+.001&&b.y+b.h<=slide.heightCssPx+.001,`${sp}.fitBackground.boxCssPx`,'Background must fit on the slide');
+        if(bg?.assetId!==undefined)check(assetIds.has(bg.assetId),`${sp}.fitBackground.background.assetId`,'Unknown background asset');
+      }
       const nodes = array(slide.nodes, `${sp}.nodes`), byId = new Map();
       for (const [j, n] of nodes.entries()) {
         const np = `${sp}.nodes[${j}]`;
