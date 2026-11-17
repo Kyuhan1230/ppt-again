@@ -1,16 +1,15 @@
 import PptxGenJS from 'pptxgenjs';
 import {diagnostic,validateModel} from './model.mjs';
-import {assetDataUrl,sha256} from './assets.mjs';
+import {sha256} from './assets.mjs';
+import {verifiedBackgroundDataUrl,validateBackgroundCapture} from './background-assets.mjs';
 import {groupDiagnostics,applyFlatGroups} from './groups.mjs';
 import {applyTransitions} from './transitions.mjs';
 import {applyNativePresetShapes} from './native-presets.mjs';
 import {canvasSize,EMU_PER_POINT} from './canvas.mjs';
-import {addNativeTable} from './write-table.mjs';
-import {addNativeChart} from './write-chart.mjs';
 import {chartText} from './charts.mjs';
 import {planFontEmbedding,embedPptxFonts} from './font-embedding.mjs';
-import {pptCharacterSpacing} from './text-spacing.mjs';
-import {applyTextParagraphs,paragraphTextRuns} from './write-paragraphs.mjs';
+import {applyTextParagraphs} from './write-paragraphs.mjs';
+import {writePptxText,writePptxShape,writePptxLine,writePptxImage,writePptxTable,writePptxChart,writePptxBackgroundFill} from './pptx-object-writers.mjs';
 import {safeError} from './error-log.mjs';
 
 function paint(value,opacity=1){
@@ -133,6 +132,14 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
     for(const {group,message} of groupDiagnostics(slide))issue('UNSUPPORTED_OBJECT',message,slide,group);
     for(const n of slide.nodes){
       if(n.kind==='shape'&&n.style.backgroundImage&&n.style.backgroundImage!=='none'&&!n.style.assetId)issue('RENDER_INCOMPLETE','객체의 분리된 장식 배경 자산이 없습니다.',slide,n);
+      if(n.kind==='shape'&&n.style.assetId&&n.style.capture?.content!=='computed-background-only'){
+        const st=n.style;
+        if((st.shape==='ellipse'||(st.radius??0)>0))issue('UNSUPPORTED_OBJECT','그림 배경의 둥근 도형 잘림은 아직 보존할 수 없습니다.',slide,n);
+        else if((st.opacity??1)>0&&(st.opacity??1)<1){
+          let visibleFill=false;try{visibleFill=paint(st.fill,st.fillOpacity??1).transparency<100;}catch{}
+          if(visibleFill)issue('UNSUPPORTED_OBJECT','도형 색과 그림을 함께 반투명하게 합성하는 배경은 아직 보존할 수 없습니다.',slide,n);
+        }
+      }
       if(n.kind==='text'&&!m?.objects.some(o=>o.nodeId===n.id&&o.lines?.length&&Number.isFinite(o.baseline)))issue('RENDER_INCOMPLETE','텍스트의 실제 줄·기준선 측정이 없습니다.',slide,n);
       if(n.kind==='text')for(const style of [n.style,...(n.content.runs??[]).map(r=>r.style)])if(!resolveFont(style,slide))issue('FONT_UNAVAILABLE',`PPT에서 사용할 글꼴 대응을 확인할 수 없습니다: ${style.fontFamily} ${style.fontWeight}`,slide,n);
       if(n.kind==='table')for(const cell of n.content.cells)for(const style of [cell.style,...cell.runs.map(r=>r.style)])if(!resolveFont(style,slide))issue('FONT_UNAVAILABLE',`PPT 표에서 사용할 글꼴 대응을 확인할 수 없습니다: ${style.fontFamily} ${style.fontWeight}`,slide,n);
@@ -146,99 +153,55 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
     profile.targetSizePt={width:first.widthCssPx*pointScale,height:first.heightCssPx*pointScale};profile.pointScale=pointScale;
     pptx.defineLayout({name:'HTML_SLIDES',width:sizeEmu.width/914400,height:sizeEmu.height/914400});pptx.layout='HTML_SLIDES';
     pptx.title='HTML 장표';pptx.author='HTML to editable PPTX';pptx.subject='Native text and shapes; visual validation is separate';pptx.lang='ko-KR';
+    const backgroundUrls=new Map();
     for(const [index,source] of measured.model.slides.entries()){
       if(source.widthCssPx!==first.widthCssPx||source.heightCssPx!==first.heightCssPx)throw new Error('Mixed slide sizes are unsupported');
-      const slide=pptx.addSlide();slide.background=paint(source.background?.color??'#ffffff');
+      const slide=pptx.addSlide();
+      // Captured artwork already includes the background color and its alpha.
+      // Applying that color again underneath would change translucent pixels.
+      slide.background=paint(source.background?.assetId&&source.background.capture?.content==='computed-background-only'?'transparent':source.background?.color??'#ffffff');
       let objectId=2;
       const objectNames=new Set(source.nodes.map(n=>n.id));
-      const addBackground=(assetId,box,derivedFrom=null,sourceRef=null,opacity=1)=>{
+      const addBackground=(assetId,box,derivedFrom=null,sourceRef=null,opacity=1,capture=undefined,bounds=undefined)=>{
         const asset=measured.model.assets.find(a=>a.id===assetId);if(!asset)throw new Error('Background asset missing');
+        validateBackgroundCapture(capture,asset,bounds);
+        let data=backgroundUrls.get(assetId);
+        if(data===undefined){data=verifiedBackgroundDataUrl(asset);backgroundUrls.set(assetId,data);}
+        if(asset.mime==='image/jpeg')diagnostics.push(diagnostic('BACKGROUND_JPEG_UNVERIFIED','JPEG 배경의 그림 전체를 읽을 수 있는지는 확인하지 못했습니다.',{slideId:source.id,nodeId:derivedFrom,sourceRef},'warning'));
         const baseName=derivedFrom?`${derivedFrom}::art`:`${source.id}::background`;
         let name=baseName,suffix=1;
         while(objectNames.has(name))name=`${baseName}::derived-${suffix++}`;
         objectNames.add(name);
-        slide.addImage({...box,data:assetDataUrl(asset),objectName:name,transparency:(1-opacity)*100});
+        slide.addImage({...box,data,objectName:name,transparency:(1-opacity)*100});
         objectMap.push({sourceSlideId:source.id,sourceNodeId:name,derivedFrom,sourceRef:sourceRef??{slideId:source.id,path:'background'},pptSlideNumber:index+1,pptObjectId:objectId++,pptObjectName:name,support:'background-art',parentId:null,assetSha256:asset.sha256});
       };
-      if(source.background?.assetId)addBackground(source.background.assetId,{x:0,y:0,w:inches(source.widthCssPx),h:inches(source.heightCssPx)});
+      if(source.background?.assetId)addBackground(source.background.assetId,{x:0,y:0,w:inches(source.widthCssPx),h:inches(source.heightCssPx)},null,null,1,source.background.capture,{w:source.widthCssPx,h:source.heightCssPx});
+      const writerContext={slide,pptx,source,measured,pointScale,inchScale,inches,paint,resolveTextFont,resolveFont,profile,diagnostics};
       for(const node of [...source.nodes].sort((a,b)=>a.zOrder-b.zOrder)){
         if(node.kind==='group')continue;
         if(node.kind==='table'){
-          const entry=addNativeTable(slide,node,{pointScale,resolveFont:s=>resolveTextFont(s,source),paint});
+          const entry=writePptxTable(node,writerContext);
           objectMap.push({...entry,sourceSlideId:source.id,pptSlideNumber:index+1,pptObjectId:objectId++});continue;
         }
         if(node.kind==='chart'){
-          const entry=addNativeChart(slide,node,{pointScale,resolveFont:s=>resolveFont(s,source)});
+          const entry=writePptxChart(node,writerContext);
           objectMap.push({...entry,sourceSlideId:source.id,pptSlideNumber:index+1,pptObjectId:objectId++});continue;
         }
         const b=node.boxCssPx,st=node.style,box={x:inches(b.x),y:inches(b.y),w:inches(b.w),h:inches(b.h),objectName:node.id};
-        if(node.kind==='shape'&&st.assetId)addBackground(st.assetId,box,node.id,node.sourceRef,st.opacity??1);
-        if(node.kind==='text'){
-          const runOptions=s=>({...resolveTextFont(s,source),fontSize:s.fontSize*pointScale,italic:s.fontStyle==='italic',color:paint(s.color,st.opacity).color,transparency:paint(s.color,st.opacity).transparency,charSpacing:pptCharacterSpacing(s,pointScale),underline:s.textDecoration?.includes('underline')?{style:'sng'}:undefined,...(Number.isInteger(s.baseline)&&s.baseline!==0&&Math.abs(s.baseline)<=100000?{baseline:s.baseline/50}:{}),breakLine:false});
-          const makeRun=r=>{
-            const options=runOptions(r.style),outline=r.style.outline;
-            if(outline){
-              const color=paint(outline.color,st.opacity??1);
-              if(color.transparency!==0||!Number.isFinite(outline.width)||outline.width<=0)throw new Error('불투명 단색 외의 글자 외곽선은 지원하지 않습니다.');
-              options.outline={color:color.color,size:outline.width*pointScale};
-            }
-            if(r.style.highlight){const highlight=paint(r.style.highlight);if(highlight.transparency!==0)throw new Error('불투명 단색 외의 글자 형광펜은 지원하지 않습니다.');options.highlight=highlight.color;}
-            return {text:r.text,options};
-          };
-          let runs=node.content.paragraphs?node.content.paragraphs.flatMap((para,index)=>{
-            const items=paragraphTextRuns(para,makeRun,st),spacing=parseFloat(para.lineHeight)*(para.lineHeight.endsWith('px')?1:(para.runs.find(r=>!r.marker)?.style.fontSize??st.fontSize))*pointScale;
-            for(const item of items)Object.assign(item.options,{align:para.align,lineSpacing:spacing,paraSpaceBefore:para.beforePx*pointScale,paraSpaceAfter:para.afterPx*pointScale});
-            if(index<node.content.paragraphs.length-1)items.at(-1).options.breakLine=true;
-            return items;
-          }):(node.content.runs??[{text:node.content.text,style:st}]).map(makeRun);
-          if(node.content.tableCellGroup){
-            const lines=[];for(const run of runs){const segments=run.text.split('\n');for(let i=0;i<segments.length;i++){if(segments[i])lines.push({text:segments[i],options:{...run.options}});if(i<segments.length-1){if(!lines.length)lines.push({text:'',options:{...run.options}});lines.at(-1).options.breakLine=true;}}}runs=lines;
+        if(node.kind==='shape'&&st.assetId){
+          const captured=st.capture?.content==='computed-background-only';
+          if(!captured&&(st.opacity??1)>0&&paint(st.fill,st.fillOpacity??1).transparency<100){
+            const baseName=`${node.id}::fill`;let name=baseName,suffix=1;
+            while(objectNames.has(name))name=`${baseName}::derived-${suffix++}`;
+            objectNames.add(name);writePptxBackgroundFill(node,box,writerContext,name);
+            objectMap.push({sourceSlideId:source.id,sourceNodeId:name,derivedFrom:node.id,sourceRef:node.sourceRef,pptSlideNumber:index+1,pptObjectId:objectId++,pptObjectName:name,support:'native-shape',parentId:null});
           }
-          const padding=st.padding??{left:0,right:0,top:0,bottom:0};
-          // Browser and Office advances can differ slightly in a tight auto-sized
-          // label. Preserve a measured single line without enlarging its box or
-          // shrinking type. Longer edits may overflow and need a fresh HTML export.
-          const layout=measured.measurements.find(m=>m.slideId===source.id).objects.find(o=>o.nodeId===node.id);
-          const {bold:defaultBold,italic:defaultItalic,...textDefaults}=runOptions(st);
-          const shapeOptions=node.pptxOrigin?{
-            shape:st.radius>0?pptx.ShapeType.roundRect:pptx.ShapeType.rect,
-            rectRadius:st.radius>0?st.radius*inchScale:undefined,
-            fill:paint(st.fill,(st.opacity??1)*(st.fillOpacity??1)),
-            line:{...paint(st.stroke,(st.strokeWidth??0)>0?(st.opacity??1)*(st.strokeOpacity??1):0),width:(st.strokeWidth??0)*pointScale,dashType:st.dash||st.borderStyle==='dashed'?'dash':st.borderStyle==='dotted'?'sysDot':'solid'},
-            isTextBox:node.pptxOrigin.textBox
-          }:{isTextBox:true};
-          slide.addText(runs,{...box,...textDefaults,...shapeOptions,margin:[padding.left,padding.right,padding.bottom,padding.top].map(v=>v*pointScale),lineSpacing:st.lineHeight!=='normal'&&parseFloat(st.lineHeight)>0?parseFloat(st.lineHeight)*pointScale:undefined,paraSpaceBefore:0,paraSpaceAfter:0,align:st.align??'left',valign:st.valign??'top',fit:'none',wrap:!['pre','nowrap'].includes(st.whiteSpace)&&layout.lines.length!==1,lang:'ko-KR'});
-        }else if(node.kind==='shape'){
-          const stroke=paint(st.stroke,(st.strokeWidth??0)>0?(st.opacity??1)*(st.strokeOpacity??1):0),half=st.svgGeometry||stroke.transparency===100?0:(st.strokeWidth??0)/2;
-          if(b.w<=half*2||b.h<=half*2)throw new Error('Border is wider than the shape');
-          slide.addShape(st.shape==='ellipse'?pptx.ShapeType.ellipse:st.radius>0?pptx.ShapeType.roundRect:pptx.ShapeType.rect,{...box,x:inches(b.x+half),y:inches(b.y+half),w:inches(b.w-2*half),h:inches(b.h-2*half),rectRadius:st.shape==='ellipse'?undefined:Math.max(0,(st.radius??0)-half)*inchScale,fill:paint(st.assetId?'transparent':st.fill,(st.opacity??1)*(st.fillOpacity??1)),line:{...stroke,width:(st.strokeWidth??0)*pointScale,dashType:st.dash||st.borderStyle==='dashed'?'dash':st.borderStyle==='dotted'?'sysDot':'solid'}});
-        }else if(node.kind==='line'){
-          const horizontal=b.w>=b.h,t=st.strokeWidth||Math.min(b.w,b.h)||1;
-          if(st.svgGeometry&&st.endpoints){
-            const {start,end}=st.endpoints;
-            slide.addShape(pptx.ShapeType.line,{...box,x:inches(Math.min(start.x,end.x)),y:inches(Math.min(start.y,end.y)),w:inches(Math.abs(end.x-start.x)),h:inches(Math.abs(end.y-start.y)),flipH:end.x<start.x,flipV:end.y<start.y,line:{...paint(st.stroke,st.opacity),width:st.strokeWidth*pointScale}});
-            profile.lineRepresentations.strokes++;
-          }else if(st.linePaint?.kind==='bar'){
-            const {thickness,horizontal:barHorizontal}=st.linePaint;
-            slide.addShape(pptx.ShapeType.rect,{...box,w:inches(barHorizontal?b.w:thickness),h:inches(barHorizontal?thickness:b.h),fill:paint(st.linePaint.color,st.opacity),line:paint('transparent')});
-            profile.lineRepresentations.filledBars++;
-          }else{
-            slide.addShape(pptx.ShapeType.line,{...box,x:inches(b.x+(horizontal?0:t/2)),y:inches(b.y+(horizontal?t/2:0)),w:horizontal?inches(b.w):0,h:horizontal?0:inches(b.h),line:{...paint(st.stroke??st.fill,st.opacity),width:t*pointScale,dashType:st.dash?'dash':'solid'}});
-            profile.lineRepresentations.strokes++;
-          }
-        }else if(node.kind==='image'){
-          const asset=measured.model.assets.find(a=>a.id===node.content.assetId);if(!asset)throw new Error('Picture asset missing');
-          if(node.content.editableVector){
-            const v=node.content.editableVector;
-            slide.addShape(pptx.ShapeType[v.shape],{...box,x:inches(b.x+(b.w-v.width)/2),y:inches(b.y+(b.h-v.height)/2),w:inches(v.width),h:inches(v.height),rotate:v.angle,fill:paint(v.fill==='gradient'?v.gradient.from:v.fill==='none'?'transparent':v.fill,st.opacity),line:{...paint(v.stroke==='none'?'transparent':v.stroke,st.opacity),width:v.strokeWidth*pointScale}});
-          }else{
-          const crop=node.content.crop;
-          const fullWidth=crop?box.w/(1-(crop.left+crop.right)/100000):box.w,fullHeight=crop?box.h/(1-(crop.top+crop.bottom)/100000):box.h;
-          const sizing=crop?{type:'crop',x:fullWidth*crop.left/100000,y:fullHeight*crop.top/100000,w:box.w,h:box.h}:undefined;
-          slide.addImage({...box,w:fullWidth,h:fullHeight,sizing,data:assetDataUrl(asset),rounding:node.content.rounding===true,transparency:(1-(st.opacity??1))*100});
-          if(asset.mime==='image/svg+xml'&&!node.content.artworkOnly)diagnostics.push(diagnostic('UNSUPPORTED_OBJECT','SVG는 그림 객체입니다. 내부 글자와 경로를 개별 편집할 수 없습니다.',{slideId:source.id,nodeId:node.id,sourceRef:node.sourceRef},'warning'));
-          }
+          addBackground(st.assetId,box,node.id,node.sourceRef,st.opacity??1,st.capture,b);
         }
+        if(node.kind==='text')writePptxText(node,box,writerContext);
+        else if(node.kind==='shape')writePptxShape(node,box,writerContext);
+        else if(node.kind==='line')writePptxLine(node,box,writerContext);
+        else if(node.kind==='image')writePptxImage(node,box,writerContext);
         objectMap.push({sourceSlideId:source.id,sourceNodeId:node.id,sourceRef:node.sourceRef,pptSlideNumber:index+1,pptObjectId:objectId++,pptObjectName:node.id,support:node.kind==='text'?'native-text':node.kind==='image'?(node.content.editableVector?'native-shape':node.content.artworkOnly?'background-art':'picture'):'native-shape',parentId:node.parentId});
       }
       slide.addNotes('텍스트·도형은 편집 가능한 원생 객체입니다. 화면 1px 품질과 PowerPoint 편집 검증은 별도 관문입니다.');

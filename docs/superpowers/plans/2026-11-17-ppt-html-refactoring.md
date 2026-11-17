@@ -277,11 +277,11 @@ node --test tests/pptx-inherited-font-size.test.mjs tests/pptx-chart-image-fallb
 
 **수정:** `export-html.mjs`, `export.mjs`, `groups.mjs`, `native-presets.mjs`; **재사용:** `write-table.mjs`, `write-chart.mjs`, `write-paragraphs.mjs`; **신규 제안:** `html-object-writers.mjs`, `pptx-object-writers.mjs`; **신규 검증:** `tests/object-writers.test.mjs`.
 
-- [ ] 네 방향의 책임을 구분한다. PPT 읽기와 HTML 읽기는 입력별 인식기이며, HTML 만들기와 PPT 만들기는 같은 공통 객체를 각각의 출력 형식으로 바꾸는 별도 생성기다. 서로 다른 입력을 억지로 같은 파서에 넣지 않는다.
-- [ ] HTML 생성기는 공통 `text`의 문단/서식과 도형 배경, `shape`/`line`, `image`/자르기, `group`, `table`, `chart`를 HTML/CSS/SVG 및 왕복 메타데이터로 기록한다. 사용자에게 보이는 콘텐츠는 중복 저장하지 않고 HTML의 현재 값을 다시 읽는다.
-- [ ] PPT 생성기는 같은 종류를 네이티브 텍스트/도형/선/그림/그룹/표/차트로 출력한다. 기존 문단·그룹·프리셋·전환 후처리와 `write-table`, `write-chart`, `write-paragraphs`를 재사용하고 표 셀의 텍스트를 중복 생성하지 않는다.
-- [ ] 공통 순서·좌표·진단·자산/글꼴 해석과 종류별 생성만 분리한다. 현재 공개 함수 `exportHtml(model)`과 `exportPptx(measured, options)`의 계약 및 별도 줄·기준선 측정값을 유지한다. HTML 작성자와 PPT 작성자가 같은 종류의 객체를 반드시 같은 방식으로 표현한다고 가정하지 않는다.
-- [ ] 객체 순서, 대상 식별자, 부모 그룹, 이미지 crop, 텍스트의 문단과 굵기, 원본 하나의 도형 복원, 수치가 없는 차트 그림과 지원 제한의 결과를 각각 비교한다. PPT → HTML의 미리보기 실패와 생성 실패를 분리한다.
+- [x] 네 방향의 책임을 구분한다. PPT 읽기와 HTML 읽기는 입력별 인식기이며, HTML 만들기와 PPT 만들기는 같은 공통 객체를 각각의 출력 형식으로 바꾸는 별도 생성기다. 서로 다른 입력을 억지로 같은 파서에 넣지 않는다.
+- [x] HTML 생성기는 공통 `text`의 문단/서식과 도형 배경, `shape`/`line`, `image`/자르기, `group`, `table`, `chart`를 HTML/CSS/SVG 및 왕복 메타데이터로 기록한다. 사용자에게 보이는 콘텐츠는 중복 저장하지 않고 HTML의 현재 값을 다시 읽는다.
+- [x] PPT 생성기는 같은 종류를 네이티브 텍스트/도형/선/그림/그룹/표/차트로 출력한다. 기존 문단·그룹·프리셋·전환 후처리와 `write-table`, `write-chart`, `write-paragraphs`를 재사용하고 표 셀의 텍스트를 중복 생성하지 않는다.
+- [x] 공통 순서·좌표·진단·자산/글꼴 해석과 종류별 생성만 분리한다. 현재 공개 함수 `exportHtml(model)`과 `exportPptx(measured, options)`의 계약 및 별도 줄·기준선 측정값을 유지한다. HTML 작성자와 PPT 작성자가 같은 종류의 객체를 반드시 같은 방식으로 표현한다고 가정하지 않는다.
+- [x] 객체 순서, 대상 식별자, 부모 그룹, 이미지 crop, 텍스트의 문단과 굵기, 원본 하나의 도형 복원, 수치가 없는 차트 그림과 지원 제한의 결과를 각각 비교한다. PPT → HTML의 미리보기 실패와 생성 실패를 분리한다.
 
 ```powershell
 node --test tests/object-writers.test.mjs tests/text-shape-html.test.mjs tests/pptx-object-identity-roundtrip.test.mjs tests/pptx-nested-group-export.test.mjs tests/pptx-preview-diagnostics.test.mjs
