@@ -200,7 +200,14 @@ export async function exportPptx(measured,{fontEmbedding='off'}={}){
           // shrinking type. Longer edits may overflow and need a fresh HTML export.
           const layout=measured.measurements.find(m=>m.slideId===source.id).objects.find(o=>o.nodeId===node.id);
           const {bold:defaultBold,italic:defaultItalic,...textDefaults}=runOptions(st);
-          slide.addText(runs,{...box,...textDefaults,margin:[padding.left,padding.right,padding.bottom,padding.top].map(v=>v*pointScale),lineSpacing:st.lineHeight!=='normal'&&parseFloat(st.lineHeight)>0?parseFloat(st.lineHeight)*pointScale:undefined,paraSpaceBefore:0,paraSpaceAfter:0,align:st.align??'left',valign:st.valign??'top',fit:'none',wrap:!['pre','nowrap'].includes(st.whiteSpace)&&layout.lines.length!==1,isTextBox:true,lang:'ko-KR'});
+          const shapeOptions=node.pptxOrigin?{
+            shape:st.radius>0?pptx.ShapeType.roundRect:pptx.ShapeType.rect,
+            rectRadius:st.radius>0?st.radius*inchScale:undefined,
+            fill:paint(st.fill,(st.opacity??1)*(st.fillOpacity??1)),
+            line:{...paint(st.stroke,(st.strokeWidth??0)>0?(st.opacity??1)*(st.strokeOpacity??1):0),width:(st.strokeWidth??0)*pointScale,dashType:st.dash||st.borderStyle==='dashed'?'dash':st.borderStyle==='dotted'?'sysDot':'solid'},
+            isTextBox:node.pptxOrigin.textBox
+          }:{isTextBox:true};
+          slide.addText(runs,{...box,...textDefaults,...shapeOptions,margin:[padding.left,padding.right,padding.bottom,padding.top].map(v=>v*pointScale),lineSpacing:st.lineHeight!=='normal'&&parseFloat(st.lineHeight)>0?parseFloat(st.lineHeight)*pointScale:undefined,paraSpaceBefore:0,paraSpaceAfter:0,align:st.align??'left',valign:st.valign??'top',fit:'none',wrap:!['pre','nowrap'].includes(st.whiteSpace)&&layout.lines.length!==1,lang:'ko-KR'});
         }else if(node.kind==='shape'){
           const stroke=paint(st.stroke,(st.strokeWidth??0)>0?(st.opacity??1)*(st.strokeOpacity??1):0),half=st.svgGeometry||stroke.transparency===100?0:(st.strokeWidth??0)/2;
           if(b.w<=half*2||b.h<=half*2)throw new Error('Border is wider than the shape');
