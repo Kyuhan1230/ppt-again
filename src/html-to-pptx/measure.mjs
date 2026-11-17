@@ -9,6 +9,8 @@ import {applyFallbackFont} from './fallback-font.mjs';
 import {renderChartSvg} from './charts.mjs';
 import {officeCompatiblePresetGradient,presetVectorMarkup} from './preset-vector.mjs';
 import {safeError} from './error-log.mjs';
+import {parse} from 'parse5';
+import {attribute,walkHtml} from './input.mjs';
 
 export function scopeEmbeddedModelErrors(errors,slides){
   return errors.map(error=>{const match=/^slides\[(\d+)\]\./.exec(error.path),slide=match?slides[Number(match[1])]:null;return diagnostic('INPUT_INVALID',`${error.path}: ${error.message}`,slide?{slideId:slide.id}:{});});
@@ -758,6 +760,7 @@ export async function measureInput(input,runtime) {
     if(input.profile==='svg-slides-v1'){await measureSvgInput(input,runtime,session,result);await attachFonts();return result;}
     let selector=input.profile==='project-data-v1'?'[data-slide]':input.source.slideSelector??'[data-slide]';
     // Auto-detect only an unambiguous visible fixed-size container; never guess among competing containers.
+    let automaticallyDetected=false;
     if(input.profile==='static-slides-v1'&&!input.source.slideSelector){
       const detected=await session.page.evaluate(()=>{
         if(document.querySelector('[data-slide]'))return null;
@@ -769,8 +772,136 @@ export async function measureInput(input,runtime) {
         let el=candidates[0],parts=[];while(el&&el!==document.body){const siblings=[...el.parentElement.children].filter(child=>child.tagName===el.tagName);parts.unshift(el.tagName.toLowerCase()+':nth-of-type('+(siblings.indexOf(el)+1)+')');el=el.parentElement;}
         return el?'body > '+parts.join(' > '):null;
       });
-      if(detected)selector=detected;
+      if(detected){selector=detected;automaticallyDetected=true;}
     }
+    const inspectOutside=selector=>{
+        let roots;try{roots=[...document.querySelectorAll(selector)];}catch{return {outside:false,hidden:false};}
+        if(!roots.length)return {outside:false,hidden:false};
+        const rootSet=new Set(roots),insideSet=new WeakSet(),ancestorSet=new WeakSet(),noText=new WeakSet(),noElement=new WeakSet();
+        for(const el of document.querySelectorAll('*')){
+          const parent=el.parentElement;
+          if(rootSet.has(el)||parent&&insideSet.has(parent))insideSet.add(el);
+          if(['script','style','svg'].includes(el.localName)||parent&&noText.has(parent))noText.add(el);
+          if(['script','style'].includes(el.localName)||parent&&noText.has(parent))noElement.add(el);
+        }
+        for(const root of roots)for(let p=root.parentElement;p&&!ancestorSet.has(p);p=p.parentElement)ancestorSet.add(p);
+        const inside=el=>insideSet.has(el),ancestor=el=>ancestorSet.has(el);
+        const paintableCache=new WeakMap();
+        const paintable=el=>{
+          const pending=[];let p=el;
+          while(p&&!paintableCache.has(p)){pending.push(p);p=p.parentElement;}
+          let ok=p?paintableCache.get(p):true;
+          while(pending.length){const item=pending.pop(),s=getComputedStyle(item);ok=ok&&s.display!=='none'&&Number(s.opacity)!==0&&s.contentVisibility!=='hidden';paintableCache.set(item,ok);}
+          return ok;
+        };
+        const rendered=el=>getComputedStyle(el).visibility==='visible'&&paintable(el);
+        const clipCache=new WeakMap();
+        const clippedBy=el=>{
+          const pending=[];let p=el;
+          while(p&&!clipCache.has(p)){pending.push(p);p=p.parentElement;}
+          let bounds=p?clipCache.get(p):{left:-Infinity,right:Infinity,top:-Infinity,bottom:Infinity};
+          while(pending.length){
+            const item=pending.pop(),s=getComputedStyle(item),documentRoot=item===document.documentElement||item===document.body;
+            const clips=value=>!['inline','contents'].includes(s.display)&&(['hidden','clip'].includes(value)||(!documentRoot&&['scroll','auto'].includes(value)));
+            if(clips(s.overflowX)||clips(s.overflowY)){
+              const r=item.getBoundingClientRect(),sx=item.offsetWidth?r.width/item.offsetWidth:1,sy=item.offsetHeight?r.height/item.offsetHeight:1;
+              const x=r.left+item.clientLeft*sx,y=r.top+item.clientTop*sy;
+              bounds={left:clips(s.overflowX)?Math.max(bounds.left,x):bounds.left,right:clips(s.overflowX)?Math.min(bounds.right,x+item.clientWidth*sx):bounds.right,top:clips(s.overflowY)?Math.max(bounds.top,y):bounds.top,bottom:clips(s.overflowY)?Math.min(bounds.bottom,y+item.clientHeight*sy):bounds.bottom};
+            }
+            clipCache.set(item,bounds);
+          }
+          return bounds;
+        };
+        const visibleRect=(rect,el,includeSelf=false)=>{
+          const bounds=clippedBy(includeSelf?el:el.parentElement);
+          return Math.min(rect.right,bounds.right)>Math.max(rect.left,bounds.left)&&Math.min(rect.bottom,bounds.bottom)>Math.max(rect.top,bounds.top);
+        };
+        const rootRects=roots.map(root=>root.getBoundingClientRect());
+        const exposed=(rect,el)=>{
+          const clip=clippedBy(el.parentElement);
+          let pieces=[{left:Math.max(rect.left,clip.left),right:Math.min(rect.right,clip.right),top:Math.max(rect.top,clip.top),bottom:Math.min(rect.bottom,clip.bottom)}].filter(r=>r.right>r.left&&r.bottom>r.top);
+          for(const root of rootRects){
+            const next=[];
+            for(const r of pieces){
+              const left=Math.max(r.left,root.left),right=Math.min(r.right,root.right),top=Math.max(r.top,root.top),bottom=Math.min(r.bottom,root.bottom);
+              if(right<=left||bottom<=top){next.push(r);continue;}
+              next.push({left:r.left,right:r.right,top:r.top,bottom:top},{left:r.left,right:r.right,top:bottom,bottom:r.bottom},{left:r.left,right:left,top,bottom},{left:right,right:r.right,top,bottom});
+            }
+            pieces=next.filter(r=>r.right>r.left&&r.bottom>r.top);
+            if(!pieces.length)break;
+            if(pieces.length>2000)return null;
+          }
+          return pieces.length>0;
+        };
+        const transparent=color=>color==='transparent'||/^rgba\([^)]*[, /]\s*0(?:\.0+)?\s*\)$/.test(color);
+        let outside=false,hidden=false,incomplete=false;
+        const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let node;
+        while((node=walker.nextNode())){
+          const el=node.parentElement;
+          if(!node.data.trim()||!el||noText.has(el))continue;
+          if(!rendered(el)){hidden=true;continue;}
+          if(inside(el))continue;
+          const textStyle=getComputedStyle(el);
+          if(transparent(textStyle.webkitTextFillColor)&&(!parseFloat(textStyle.webkitTextStrokeWidth)||transparent(textStyle.webkitTextStrokeColor))&&textStyle.textShadow==='none'){hidden=true;continue;}
+          const range=document.createRange();range.selectNodeContents(node);
+          if([...range.getClientRects()].some(rect=>visibleRect(rect,el,true)))outside=true;
+          else hidden=true;
+        }
+        const elements=[document.documentElement,document.body,...document.body.querySelectorAll('*')];
+        for(const el of elements){
+          if(noElement.has(el))continue;
+          const media=el.matches('img,svg,video,canvas,iframe,object,embed');
+          const s=getComputedStyle(el);
+          if(!inside(el)&&(s.clipPath!=='none'||s.maskImage!=='none'||s.filter!=='none'||s.mixBlendMode!=='normal'))hidden=true;
+          const documentRoot=el===document.body||el===document.documentElement;
+          const background=s.backgroundImage!=='none'||!transparent(s.backgroundColor)&&!(documentRoot&&s.backgroundColor==='rgb(255, 255, 255)');
+          const border=['Top','Right','Bottom','Left'].some(side=>parseFloat(s[`border${side}Width`])>0&&s[`border${side}Style`]!=='none'&&!transparent(s[`border${side}Color`]));
+          if(!rendered(el)){if(media||background||border)hidden=true;continue;}
+          if(inside(el))continue;
+          const rects=[...el.getClientRects()];
+          if(s.boxShadow!=='none'||s.outlineStyle!=='none'&&parseFloat(s.outlineWidth)>0&&!transparent(s.outlineColor)){hidden=true;incomplete=true;}
+          if(ancestor(el)){
+            // A body background can also propagate to the viewport beyond its
+            // own box. Its exact painted extent is not always measurable here.
+            if(documentRoot&&background){hidden=true;incomplete=true;}
+            for(const rect of rects){
+              const strips=background?[rect]:['Top','Right','Bottom','Left'].filter(side=>parseFloat(s[`border${side}Width`])>0&&s[`border${side}Style`]!=='none'&&!transparent(s[`border${side}Color`])).map(side=>{
+                const width=parseFloat(s[`border${side}Width`]);
+                return {left:rect.left+(side==='Right'?rect.width-width:0),right:rect.right-(side==='Left'?rect.width-width:0),top:rect.top+(side==='Bottom'?rect.height-width:0),bottom:rect.bottom-(side==='Top'?rect.height-width:0)};
+              });
+              for(const strip of strips){const result=exposed(strip,el);if(result===null){hidden=true;incomplete=true;}else if(result)outside=true;}
+            }
+            continue;
+          }
+          if(media||background||border){
+            if(rects.some(rect=>visibleRect(rect,el)))outside=true;
+            else if(media)hidden=true;
+          }
+        }
+        // Pseudo-elements have no DOM rect API. Do not alter the source DOM:
+        // structural selectors can change layout even during a temporary probe.
+        pseudoScan: for(const el of elements){
+          if(outside)break;
+          if(inside(el)||noText.has(el)||!paintable(el))continue;
+          for(const pseudo of ['::before','::after']){
+            const ps=getComputedStyle(el,pseudo),content=ps.content;
+            if(['none','normal'].includes(content)||ps.display==='none'||ps.visibility!=='visible'||Number(ps.opacity)===0)continue;
+            let value;try{value=JSON.parse(content);}catch{value='\u00a0';}
+            const hasText=typeof value!=='string'||value.length>0;
+            const textVisible=hasText&&(!transparent(ps.webkitTextFillColor)||parseFloat(ps.webkitTextStrokeWidth)>0&&!transparent(ps.webkitTextStrokeColor)||ps.textShadow!=='none');
+            const decoration=ps.backgroundImage!=='none'||!transparent(ps.backgroundColor)||['Top','Right','Bottom','Left'].some(side=>parseFloat(ps[`border${side}Width`])>0&&ps[`border${side}Style`]!=='none'&&!transparent(ps[`border${side}Color`]));
+            if(!textVisible&&!decoration){if(hasText)hidden=true;continue;}
+            const host=getComputedStyle(el),r=el.getBoundingClientRect(),clip=clippedBy(el);
+            const unclipped=clip.left<=r.left&&clip.right>=r.right&&clip.top<=r.top&&clip.bottom>=r.bottom;
+            const simple=el.childNodes.length===0&&ps.position==='static'&&ps.display==='inline'&&ps.transform==='none'&&ps.cssFloat==='none'&&host.transform==='none'&&parseFloat(host.textIndent)===0&&parseFloat(ps.fontSize)>0&&unclipped;
+            if(simple&&r.width>0&&r.height>0)outside=true;
+            else {hidden=true;incomplete=true;}
+          }
+        }
+        return {outside,hidden,incomplete};
+    };
+    const inspectScope=input.profile==='static-slides-v1'&&(automaticallyDetected||input.source.slideSelector);
+    const initialObserved=inspectScope?await session.page.evaluate(inspectOutside,selector):null;
     const dimensions=selector=>{try{return [...document.querySelectorAll(selector)].map(r=>{const st=getComputedStyle(r);return [parseFloat(st.width),parseFloat(st.height)];});}catch{return [];}};
     const initialDimensions=await session.page.evaluate(dimensions,selector);
     await session.page.setViewportSize({width:1151,height:877});
@@ -782,6 +913,16 @@ export async function measureInput(input,runtime) {
     const size=await session.page.evaluate(selector=>{try{const r=document.querySelector(selector);if(!r)return null;const st=getComputedStyle(r),w=parseFloat(st.width),h=parseFloat(st.height);return w>0&&h>0?{width:Math.round(w*1280/Math.max(w,h)),height:Math.round(h*1280/Math.max(w,h))}:null;}catch{return null;}},selector);
     if(size&&size.width>0&&size.height>0)await session.page.setViewportSize(size);
     result.environment.viewport=session.page.viewportSize();
+    // Inspect before slide scaling changes the layout; the viewport does not
+    // bound the scan, but ancestor overflow does bound visible content.
+    if(inspectScope){
+      const finalObserved=await session.page.evaluate(inspectOutside,selector);
+      const observed={outside:initialObserved.outside||finalObserved.outside,hidden:initialObserved.hidden||finalObserved.hidden,incomplete:initialObserved.incomplete||finalObserved.incomplete};
+      const executableScript=[...walkHtml(parse(input.source.html))].some(n=>n.tagName==='script'&&/^(?:|module|(?:text|application)\/(?:x-)?(?:javascript(?:1\.[0-5])?|ecmascript|jscript|livescript)(?:\s*;.*)?)$/i.test((attribute(n,'type')??'').trim()));
+      if(observed.outside)result.diagnostics.push(diagnostic('SLIDE_CONTENT_OUTSIDE','장표 영역 밖에 표시된 내용이 있습니다. 스크립트로 생성되거나 숨겨진 내용은 확인하지 못합니다.',{},input.source.slideSelector?'warning':'error'));
+      if(observed.incomplete&&!input.source.slideSelector)result.diagnostics.push(diagnostic('RENDER_INCOMPLETE','장표 바깥 내용의 검사를 마치지 못했습니다.'));
+      if(observed.hidden||observed.incomplete||executableScript)result.diagnostics.push(diagnostic('SLIDE_CONTENT_UNOBSERVED','스크립트로 생성되거나 숨겨진 내용과 일부 CSS 합성은 확인하지 못했습니다. 원본과 선택 범위를 확인해 주세요.',{},'warning'));
+    }
     if(input.charts?.length){
       const frames=await session.page.evaluate(({selector,ids})=>{
         let roots;try{roots=[...document.querySelectorAll(selector)];}catch{return [];}
