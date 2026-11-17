@@ -87,13 +87,16 @@ test('three round trips retain current edits and untouched coordinates for indep
   }
 });
 
-test('normalized preview does not clip the canvas to its responsive viewer wrapper',async()=>{
+test('source preview keeps the entire slide at the selected responsive viewport',async()=>{
   const {readPptx,exportHtml}=await roundtripApi();const html=exportHtml((await readPptx(await nativeFixture())).model).html;
-  const input=await readInput({html}),m=await measureInput(input,{...runtime,capture:true});
+  const viewport={width:800,height:600},input=await readInput({html}),m=await measureInput(input,{...runtime,capture:true},{viewport});
   assert.equal(m.previews.length,1,JSON.stringify(m.diagnostics));
-  const session=await runtime.render(input);
+  assert.equal(m.environment.previewKind,'source');assert.deepEqual(m.environment.viewport,viewport);
+  const session=await runtime.render(input,{viewport});
   try{
-    const pixel=await session.page.evaluate(async src=>{const i=new Image();i.src=src;await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const x=c.getContext('2d');x.drawImage(i,0,0);return [...x.getImageData(1200,680,1,1).data];},`data:image/png;base64,${Buffer.from(m.previews[0].bytes).toString('base64')}`);
+    const bounds=await session.page.locator('[data-slide]').boundingBox();
+    assert.ok(bounds);assert.ok(Math.abs(m.previews[0].width-bounds.width)<=1&&Math.abs(m.previews[0].height-bounds.height)<=1,JSON.stringify({preview:{width:m.previews[0].width,height:m.previews[0].height},bounds}));
+    const pixel=await session.page.evaluate(async src=>{const i=new Image();i.src=src;await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const x=c.getContext('2d');x.drawImage(i,0,0);return [...x.getImageData(i.width-10,i.height-10,1,1).data];},`data:image/png;base64,${Buffer.from(m.previews[0].bytes).toString('base64')}`);
     assert.deepEqual(pixel,[255,255,255,255],'The lower right of the slide must be visible');
   }finally{await session.context.close();}
 });

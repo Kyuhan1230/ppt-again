@@ -43,22 +43,13 @@ export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,a
     }
     const id=(declared?root.dataset.slideId:null)||root.id||`slide-${slideIndex+1}`;
     const rootStyle=getComputedStyle(root),before=root.getBoundingClientRect();
-    const width=parseFloat(rootStyle.width),height=parseFloat(rootStyle.height);
-    const widthValue=root.computedStyleMap?.().get('width')?.toString(),heightValue=root.computedStyleMap?.().get('height')?.toString();
-    if(!width||!height||(widthValue==='auto'||heightValue==='auto')&&rootStyle.aspectRatio==='auto') {issue('SLIDE_ROOT_REQUIRED','장표의 고정 너비와 높이를 확인할 수 없습니다.',id,null,{slideId:id,path:root.dataset.sourcePath??selector});continue;}
+    const width=!declared?before.width:parseFloat(rootStyle.width),height=!declared?before.height:parseFloat(rootStyle.height);
+    if(!width||!height) {issue('SLIDE_ROOT_REQUIRED','장표의 너비와 높이를 확인할 수 없습니다.',id,null,{slideId:id,path:root.dataset.sourcePath??selector});continue;}
     if(roots.some(r=>r!==root&&r.contains(root))){issue('SLIDE_ROOT_REQUIRED','장표 루트가 중첩됩니다.',id);continue;}
-    if(rootStyle.transform!=='none') {const m=new DOMMatrix(rootStyle.transform);if(m.b!==0||m.c!==0||m.a<=0||Math.abs(m.a-m.d)>.0001){issue('UNSUPPORTED_OBJECT','장표 루트의 비균일/회전 변환은 지원하지 않습니다.',id);continue;}}
-    const sourceTransformScale=round(before.width/width);
-    if(slides.length&&(Math.abs(slides[0].widthCssPx-width)>.01||Math.abs(slides[0].heightCssPx-height)>.01))issue('UNSUPPORTED_OBJECT','한 PPT 안의 서로 다른 장표 크기는 지원하지 않습니다.',id);
-    const renderScale=1280/Math.max(width,height),referenceSize={width:Math.round(width*renderScale),height:Math.round(height*renderScale)};
-    // The responsive frame is presentation chrome, not a clipping mask on the
-    // logical slide. Its dimensions must not crop a normalized measurement.
-    if(editable&&root.parentElement?.classList.contains('slide-view')){
-      root.parentElement.style.width=`${referenceSize.width}px`;root.parentElement.style.maxWidth='none';
-      root.parentElement.style.height=`${referenceSize.height}px`;root.parentElement.style.overflow='visible';
-    }
-    // Render at the declared output size from the start; never rescale captures.
-    root.style.setProperty('transform',`scale(${renderScale})`,'important');root.style.setProperty('transform-origin','0 0','important');
+    if(rootStyle.transform!=='none') {const m=new DOMMatrix(rootStyle.transform);if(!editable||m.b!==0||m.c!==0||m.a<=0||Math.abs(m.a-m.d)>.0001){issue('UNSUPPORTED_OBJECT','장표 루트의 변환은 현재 화면 크기에서 지원하지 않습니다.',id);continue;}}
+    const sourceTransformScale=before.width/width;
+    if(editable&&(Math.abs(before.height/height-sourceTransformScale)>.0001||(()=>{for(let p=root.parentElement;p;p=p.parentElement)if(getComputedStyle(p).transform!=='none'||getComputedStyle(p).perspective!=='none')return true;return false;})())){issue('UNSUPPORTED_OBJECT','장표 부모의 변환 또는 비균일 축척은 지원하지 않습니다.',id);continue;}
+    const renderScale=editable?sourceTransformScale:1,referenceSize={width:Math.round(width*renderScale),height:Math.round(height*renderScale)};
     const rr=root.getBoundingClientRect();
     const boxOf=el=>{const r=el.getBoundingClientRect();return {x:round((r.x-rr.x)/renderScale),y:round((r.y-rr.y)/renderScale),w:round(r.width/renderScale),h:round(r.height/renderScale)};};
     const nodes=[],objects=[],seen=new Set(),textOwners=new Set(),domOrder=new WeakMap(),orderKeys=new Map();let order=0,domIndex=0;

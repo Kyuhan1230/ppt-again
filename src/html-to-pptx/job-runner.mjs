@@ -1,6 +1,7 @@
 import {fork,execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import fs from 'node:fs/promises';
+import {validSizePolicy} from './size-policy-input.mjs';
 const execute=promisify(execFile),MiB=1024*1024;
 const operations=new Set(['analyze-html','inspect-html','verify-html-selection','analyze-html-selection','analyze-pptx','export-pptx','read-pptx','export-html']);
 // The observed worker and browser memory budget is 2 GiB; sampling can
@@ -14,10 +15,11 @@ function validateInput(operation,input){
   if(!operations.has(operation))throw failure('INPUT_INVALID');
   if(operation==='analyze-html'||operation==='inspect-html'||operation==='verify-html-selection'||operation==='analyze-html-selection'){
     if(!input||typeof input.html!=='string'||!Array.isArray(input.assets??[]))throw failure('INPUT_INVALID');
+    if(input.sizePolicy!==undefined&&!validSizePolicy(input.sizePolicy))throw failure('INPUT_INVALID');
+    if(input.viewport!==undefined&&(!input.viewport||typeof input.viewport!=='object'||Array.isArray(input.viewport)||Object.keys(input.viewport).some(key=>!['width','height'].includes(key))||!Number.isSafeInteger(input.viewport.width)||!Number.isSafeInteger(input.viewport.height)||input.viewport.width<1||input.viewport.height<1||input.viewport.width>8192||input.viewport.height>8192))throw failure('INPUT_INVALID');
     if(operation!=='analyze-html'){
-      const allowed=new Set(['html','assets','slideSelector','allowTableOverlay','viewport',...(['verify-html-selection','analyze-html-selection'].includes(operation)?['snapshotId','choiceId']:[])]);
+      const allowed=new Set(['html','assets','slideSelector','allowTableOverlay','viewport','sizePolicy',...(['verify-html-selection','analyze-html-selection'].includes(operation)?['snapshotId','choiceId']:[])]);
       if(Object.keys(input).some(key=>!allowed.has(key))||(input.assets??[]).length>4096)throw failure('INPUT_INVALID');
-      if(input.viewport!==undefined&&(!input.viewport||Object.keys(input.viewport).some(key=>!['width','height'].includes(key))||!Number.isSafeInteger(input.viewport.width)||!Number.isSafeInteger(input.viewport.height)||input.viewport.width<1||input.viewport.height<1||input.viewport.width>8192||input.viewport.height>8192))throw failure('INPUT_INVALID');
       if(input.slideSelector!==undefined&&input.slideSelector!==null&&(typeof input.slideSelector!=='string'||input.slideSelector.length>4096))throw failure('INPUT_INVALID');
       if(input.allowTableOverlay!==undefined&&typeof input.allowTableOverlay!=='boolean')throw failure('INPUT_INVALID');
     }
@@ -70,9 +72,10 @@ async function processRows(){
 async function processTree(owned,initialPid=null){
   const rows=await processRows();
   if(initialPid){const worker=rows.find(row=>row.pid===initialPid);if(!worker?.created)throw failure('OBSERVER_IDENTITY_UNAVAILABLE',500);owned.set(worker.pid,worker.created);}
+  if(rows.some(row=>owned.has(row.pid)&&!row.created))throw failure('OBSERVER_IDENTITY_UNAVAILABLE',500);
   const ids=new Set(rows.filter(row=>row.created&&owned.get(row.pid)===row.created).map(row=>row.pid));
   const byPid=new Map(rows.map(row=>[row.pid,row]));
-  let changed=true;while(changed){changed=false;for(const row of rows)if(ids.has(row.parent)&&!ids.has(row.pid)&&row.created&&BigInt(row.created)>=BigInt(byPid.get(row.parent).created)){ids.add(row.pid);changed=true;}}
+  let changed=true;while(changed){changed=false;for(const row of rows)if(ids.has(row.parent)&&!ids.has(row.pid)){if(!row.created)throw failure('OBSERVER_IDENTITY_UNAVAILABLE',500);if(BigInt(row.created)>=BigInt(byPid.get(row.parent).created)){ids.add(row.pid);changed=true;}}}
   const selected=rows.filter(row=>ids.has(row.pid)&&row.created);
   for(const row of selected)owned.set(row.pid,row.created);
   return selected;

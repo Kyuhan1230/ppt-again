@@ -1,5 +1,13 @@
 // CSS pixels describe the document, not the size of a browser window.
-export const EMU_PER_POINT=12700, EMU_PER_CSS_PX=9525;
+export const EMU_PER_POINT=12700, EMU_PER_CSS_PX=9525, MIN_SLIDE_EMU=914400, MAX_SLIDE_EMU=51206400;
+// Chromium can quantize each measured CSS edge by approximately 1/64px.
+// Compare aspect ratios in CSS pixels, allowing that uncertainty on both axes.
+export function sameCanvasAspect(size,slide){
+  const width=slide?.widthCssPx,height=slide?.heightCssPx;
+  if(!Number.isFinite(width)||!Number.isFinite(height)||width<=0||height<=0)return false;
+  const epsilon=Math.min(.02,Math.min(width,height)*.001);
+  return Math.abs(width*size.height-height*size.width)<=epsilon*(size.width+size.height);
+}
 export function canvasSize(deck){
   const first=deck.slides[0];
   if(deck.pptxSizeEmu)return deck.pptxSizeEmu;
@@ -7,8 +15,9 @@ export function canvasSize(deck){
   return {width:Math.round(first.widthCssPx*scale),height:Math.round(first.heightCssPx*scale)};
 }
 export function canvasDiagnostics(deck){
-  const size=deck.pptxSizeEmu;if(size===undefined)return [];
-  if(!size||!['width','height'].every(k=>Number.isSafeInteger(size[k])&&size[k]>0&&size[k]<=51206400))return ['Original PPT dimensions must be positive integer EMU within 56 inches'];
-  if(deck.slides.some(s=>Math.abs(size.width/s.widthCssPx-size.height/s.heightCssPx)>0.001))return ['Original PPT and logical canvas aspect ratios differ'];
+  if(!deck.slides?.length)return [];
+  const size=deck.pptxSizeEmu===undefined?canvasSize(deck):deck.pptxSizeEmu;
+  if(!size||!['width','height'].every(k=>Number.isSafeInteger(size[k])&&size[k]>=MIN_SLIDE_EMU&&size[k]<=MAX_SLIDE_EMU))return ['PPT dimensions must be integer EMU between 1 and 56 inches'];
+  if(deck.pptxSizeEmu!==undefined&&deck.slides.some(s=>!sameCanvasAspect(size,s)))return ['Original PPT and logical canvas aspect ratios differ'];
   return [];
 }

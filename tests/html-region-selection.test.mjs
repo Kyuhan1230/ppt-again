@@ -16,11 +16,12 @@ test('selected fixed-size candidate is measured in a new worker without acceptin
   await assert.rejects(()=>runConversion({operation:'analyze-html-selection',input:{...input,snapshotId:inspection.snapshotId,choiceId:choice.id,bounds:{x:0,y:0,width:10,height:10}}}),{code:'INPUT_INVALID'});
 });
 
-test('responsive content changes after selection are rejected before measuring',async()=>{
+test('responsive content is measured at the viewport used for selection',async()=>{
   const html=source('<style>@media(max-width:900px){.changing{display:none}}</style><section style="width:400px;height:600px;background:#eee"><p class="changing">Changes with viewport</p></section>');
   const input={html,assets:[],allowTableOverlay:true}, {inspection}=await runConversion({operation:'inspect-html',input});
   const choice=inspection.choices.find(c=>c.scope==='elements'&&c.convertible);assert.ok(choice);
-  await assert.rejects(()=>runConversion({operation:'analyze-html-selection',input:{...input,snapshotId:inspection.snapshotId,choiceId:choice.id}}),{code:'STALE_INSPECTION'});
+  const result=await runConversion({operation:'analyze-html-selection',input:{...input,snapshotId:inspection.snapshotId,choiceId:choice.id}});
+  assert.ok(JSON.stringify(result.measured.model).includes('Changes with viewport'));
 });
 
 test('compatible repeated candidates preserve slide count and order in the PPT',async()=>{
@@ -121,16 +122,18 @@ test('content-box padding and transparent borders cannot change the selected sli
     for(const extra of ['padding:20px','border:8px solid transparent']){
       const html=source(`<section style="width:400px;height:300px;${extra}">TEXT</section>`);
       const inspected=await inspectInput(await readInput({html}),runtime);
-      assert.equal(inspected.choices.find(c=>c.scope==='elements')?.convertible,false,extra);
+      const choice=inspected.choices.find(c=>c.scope==='elements');
+      assert.equal(choice?.convertible,false,extra);
+      assert.ok(choice.reasons.includes('root-size-mismatch'),JSON.stringify(choice));
       const measured=await measureInput(await readInput({html,slideSelector:'section'}),runtime);
-      assert.ok(measured.diagnostics.some(d=>d.code==='UNSUPPORTED_OBJECT'&&d.severity==='error'),JSON.stringify(measured.diagnostics));
+      assert.ok(measured.diagnostics.some(d=>d.code==='UNSUPPORTED_OBJECT'&&d.severity==='error'&&d.message.includes('content-box')&&d.message.includes('box-sizing:border-box')),JSON.stringify(measured.diagnostics));
     }
     const fixed=source('<section style="width:400px;height:300px;padding:20px;box-sizing:border-box">TEXT</section>');
     assert.equal((await inspectInput(await readInput({html:fixed}),runtime)).choices.find(c=>c.scope==='elements')?.convertible,true);
   }finally{await runtime.close();}
 });
 
-test('explicit selectors check root and parent appearance before and after viewport changes',async()=>{
+test('explicit selectors check root and parent appearance in the measured viewport',async()=>{
   const {createBrowserRuntime}=await import('../src/html-to-pptx/browser-runtime.mjs');
   const {readInput}=await import('../src/html-to-pptx/input.mjs');
   const {measureInput}=await import('../src/html-to-pptx/measure.mjs');
@@ -140,7 +143,7 @@ test('explicit selectors check root and parent appearance before and after viewp
     const initiallyRounded=await measure('<style>@media(min-width:1000px){section{border-radius:80px}}</style><section style="width:400px;height:600px;background:red">TEXT</section>');
     assert.ok(initiallyRounded.diagnostics.some(d=>d.code==='UNSUPPORTED_OBJECT'&&d.severity==='error'),JSON.stringify(initiallyRounded.diagnostics));
     const finallyRounded=await measure('<style>@media(max-width:900px){section{border-radius:80px}}</style><section style="width:400px;height:600px;background:red">TEXT</section>');
-    assert.ok(finallyRounded.diagnostics.some(d=>d.code==='UNSUPPORTED_OBJECT'&&d.severity==='error'),JSON.stringify(finallyRounded.diagnostics));
+    assert.ok(!finallyRounded.diagnostics.some(d=>d.severity==='error'),JSON.stringify(finallyRounded.diagnostics));
     const initialParent=await measure('<style>@media(min-width:1000px){main{background:red}}</style><main style="width:400px;height:600px"><section style="width:400px;height:600px">TEXT</section></main>');
     assert.ok(initialParent.diagnostics.some(d=>d.code==='UNSUPPORTED_OBJECT'&&d.severity==='error'),JSON.stringify(initialParent.diagnostics));
   }finally{await runtime.close();}

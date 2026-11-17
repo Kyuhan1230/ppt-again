@@ -39,6 +39,18 @@
             <label for="selector">장표 선택자 <span class="optional">선택</span></label>
             <input id="selector" placeholder="예: .slide" spellcheck="false">
             <p class="help">변환할 영역을 직접 지정할 때 입력하세요.</p>
+            <label for="slide-size-policy">PPT 장표 크기</label>
+            <select id="slide-size-policy">
+              <option value="auto">원본 PPT 또는 첫 장 크기 (기본)</option>
+              <option value="wide">와이드 16:9</option>
+              <option value="standard">표준 4:3</option>
+              <option value="custom">직접 지정</option>
+            </select>
+            <div id="slide-size-custom" hidden>
+              <label for="slide-width">너비 (1~56인치)</label><input id="slide-width" type="number" min="1" max="56" step="0.01" value="13.33" disabled>
+              <label for="slide-height">높이 (1~56인치)</label><input id="slide-height" type="number" min="1" max="56" step="0.01" value="7.5" disabled>
+            </div>
+            <p class="help">장표의 비율을 유지해 가운데 맞추고 남는 공간은 흰색으로 채웁니다.</p>
           </div>
         </details>
         <fieldset id="pptx-options" aria-label="PPTX 가져오기 옵션" hidden>
@@ -85,6 +97,8 @@
         <span id="status-badge" data-state="idle">파일 선택 대기</span>
       </div>
       <p id="duration-note" class="duration-note" role="status" aria-live="polite" hidden></p>
+      <p id="slide-size-report" class="help" role="status" hidden></p>
+      <details id="slide-size-details" class="inline-help" hidden><summary>장표별 크기와 여백 보기</summary><ul id="slide-size-list"></ul></details>
       <button id="region-reselect-button" class="region-reselect" type="button" hidden>다른 영역 선택</button>
       <div id="empty-preview" class="empty-preview"><div class="slide-outline" aria-hidden="true">HTML <b>↔</b> PPT</div><p>파일을 분석하면 미리보기가 표시됩니다.</p></div>
       <section id="region-area" class="region-area" aria-labelledby="region-heading" hidden>

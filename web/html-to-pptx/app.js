@@ -31,7 +31,7 @@ const targetType=()=>currentJob?.targetType??(sourceType($('html-file').files[0]
 const targetLabel=()=>targetType()==='html'?'HTML':'PPT';
 const downloadLabel=()=>sourceType($('html-file').files[0])?(targetType()==='html'?'HTML 다운로드':'편집 가능한 PPT 다운로드'):'변환 파일 다운로드';
 function describeDirection(){
-  const source=sourceType($('html-file').files[0]);$('html-options').hidden=source==='pptx';$('pptx-options').hidden=source!=='pptx';for(const id of ['assets','asset-folder','selector'])$(id).disabled=source==='pptx';
+  const source=sourceType($('html-file').files[0]);$('html-options').hidden=source==='pptx';$('pptx-options').hidden=source!=='pptx';for(const id of ['assets','asset-folder','selector','slide-size-policy'])$(id).disabled=source==='pptx';for(const id of ['slide-width','slide-height'])$(id).disabled=source==='pptx'||$('slide-size-policy').value!=='custom';
   $('output-help').textContent=source==='pptx'?'지원되는 현재 글자·도형·표·차트를 HTML로 저장합니다. 복잡한 서식과 미지원 객체는 분석에서 알려드립니다.':'지원되는 글자·도형·표·차트를 PowerPoint에서 수정할 수 있습니다. 확인이 필요한 항목은 분석 결과에 표시합니다.';
   $('quality-note').textContent=source==='pptx'?'이 미리보기는 변환된 HTML입니다. 원본 PowerPoint 화면과 차이가 있을 수 있습니다.':'이 미리보기는 입력 HTML입니다. 함께 제공한 지원 정적 TTF·WOFF2 글꼴은 PPT에 포함합니다. 포함되지 않은 글꼴은 사용할 컴퓨터에 설치해야 합니다.';
 }
@@ -45,9 +45,16 @@ function cleanupOutstanding(){
   cleanupPromise=(async()=>{let removed=false;while(cleanupRequests.size||cleanupJobs.size){const request=cleanupRequests.size>0,id=request?cleanupRequests.values().next().value:cleanupJobs.values().next().value,response=await apiPost(request?`/api/requests/${id}`:`/api/jobs/${id}`,undefined,undefined,'DELETE');if(!response.ok&&response.status!==404)throw new Error('이전 작업을 정리하지 못했습니다. 다시 시도해 주세요.');if(response.ok)removed=true;(request?cleanupRequests:cleanupJobs).delete(id);}return removed;})().then(removed=>{$('cleanup-note').hidden=true;return removed;}).catch(error=>{$('cleanup-note').textContent='이전 작업을 삭제하지 못했습니다. 작업 삭제를 누르거나 다시 분석해 주세요.';$('cleanup-note').hidden=false;throw error;}).finally(()=>{cleanupPromise=null;jobActions();});
   return cleanupPromise;
 }
-function reset(){revision++;rememberRequest();controller?.abort();rememberCleanup(currentJob);currentJob=null;if(cleanupJobs.size||cleanupRequests.size)void cleanupOutstanding().catch(()=>{});busy=false;selectedChoiceId=null;selectableJobId=null;$('region-reselect-button').hidden=true;durationNotice(null);jobActions();const file=$('html-file').files[0],selection=selectedFileState(file),type=selection.type;$('analyze-button').disabled=!selection.valid;$('analyze-button').textContent='다시 분석';describeDirection();clearDownload();$('region-area').hidden=true;$('region-map-image').removeAttribute('src');$('preview-area').hidden=true;$('quality-note').hidden=true;$('empty-preview').hidden=false;$('empty-preview').querySelector('p').textContent='파일을 분석하면 미리보기가 표시됩니다.';$('diagnostics').hidden=true;$('diagnostics').open=false;$('diagnostic-list').replaceChildren();$('preview-image').removeAttribute('src');$('file-label').textContent=file?.name??'파일을 여기에 놓거나 선택하세요';status(file&&!selection.valid?'failed':selection.valid?'ready':'idle',selection.message);}
+function reset(){revision++;rememberRequest();controller?.abort();rememberCleanup(currentJob);currentJob=null;if(cleanupJobs.size||cleanupRequests.size)void cleanupOutstanding().catch(()=>{});busy=false;selectedChoiceId=null;selectableJobId=null;$('region-reselect-button').hidden=true;$('slide-size-report').hidden=true;$('slide-size-details').hidden=true;$('slide-size-report').textContent='';durationNotice(null);jobActions();const file=$('html-file').files[0],selection=selectedFileState(file),type=selection.type;$('analyze-button').disabled=!selection.valid;$('analyze-button').textContent='다시 분석';describeDirection();clearDownload();$('region-area').hidden=true;$('region-map-image').removeAttribute('src');$('preview-area').hidden=true;$('quality-note').hidden=true;$('empty-preview').hidden=false;$('empty-preview').querySelector('p').textContent='파일을 분석하면 미리보기가 표시됩니다.';$('diagnostics').hidden=true;$('diagnostics').open=false;$('diagnostic-list').replaceChildren();$('preview-image').removeAttribute('src');$('file-label').textContent=file?.name??'파일을 여기에 놓거나 선택하세요';status(file&&!selection.valid?'failed':selection.valid?'ready':'idle',selection.message);}
 $('html-file').addEventListener('change',()=>{reset();if(selectedFileState($('html-file').files[0]).valid)$('analyze-form').requestSubmit();});
-for(const id of ['assets','asset-folder','selector','pptx-font-policy','pptx-allow-partial'])$(id).addEventListener('change',()=>{reset();if(selectedFileState($('html-file').files[0]).valid)status('ready','설정이 바뀌었습니다. 다시 분석을 눌러 적용하세요.');});
+for(const id of ['assets','asset-folder','selector','pptx-font-policy','pptx-allow-partial','slide-size-policy','slide-width','slide-height'])$(id).addEventListener('change',()=>{$('slide-size-custom').hidden=$('slide-size-policy').value!=='custom';reset();if(selectedFileState($('html-file').files[0]).valid)status('ready','설정이 바뀌었습니다. 다시 분석을 눌러 적용하세요.');});
+function selectedSizePolicy(){
+ const mode=$('slide-size-policy').value,policy={mode:'contain'};
+ if(mode==='wide')Object.assign(policy,{targetWidthEmu:12192000,targetHeightEmu:6858000});
+ if(mode==='standard')Object.assign(policy,{targetWidthEmu:9144000,targetHeightEmu:6858000});
+ if(mode==='custom'){const w=Number($('slide-width').value),h=Number($('slide-height').value);if(!Number.isFinite(w)||!Number.isFinite(h)||w<1||h<1||w>56||h>56)throw new Error('PPT 너비와 높이는 각각 1~56인치여야 합니다.');Object.assign(policy,{targetWidthEmu:Math.round(w*914400),targetHeightEmu:Math.round(h*914400)});}
+ return policy;
+}
 const dropArea=document.querySelector('.file-area');
 for(const event of ['dragenter','dragover'])dropArea.addEventListener(event,e=>{e.preventDefault();dropArea.classList.add('dragging');});
 for(const event of ['dragleave','drop'])dropArea.addEventListener(event,e=>{e.preventDefault();dropArea.classList.remove('dragging');});
@@ -89,6 +96,7 @@ const uncertaintyText={
   'embedded-documents-have-separate-viewports':'각 페이지는 서로 다른 화면에서 확인했습니다.'
 };
 const reasonText={
+  'root-size-mismatch':'장표 영역에 content-box와 패딩 또는 테두리가 함께 있습니다. box-sizing:border-box를 사용하거나 패딩과 테두리를 제거해 주세요.',
   'conversion-selection-not-connected':'이 범위는 아직 선택해 변환할 수 없습니다.',
   'different-size':'크기가 다른 영역을 함께 변환하는 기능은 아직 지원하지 않습니다.',
   'different-sizes':'크기가 다른 영역을 함께 변환하는 기능은 아직 지원하지 않습니다.',
@@ -112,6 +120,7 @@ const regionBox=b=>b&&[b.x,b.y,b.width,b.height].every(Number.isFinite)&&b.width
 function hideRegions(){$('region-area').hidden=true;$('region-map-image').removeAttribute('src');selectedChoiceId=null;}
 function showRegions(job){
   currentJob=job;selectedChoiceId=null;clearDownload();durationNotice(null);jobActions();
+  $('slide-size-report').hidden=true;$('slide-size-details').hidden=true;
   $('region-reselect-button').hidden=true;
   $('preview-area').hidden=true;$('quality-note').hidden=true;$('empty-preview').hidden=true;$('diagnostics').hidden=true;
   $('region-area').hidden=false;status('selection-required','변환할 장표 범위를 선택해 주세요.');
@@ -159,6 +168,9 @@ function showResult(job){
   durationNotice(job.slideCount);
   currentJob=job;const messages=resultMessages(job);status(job.status,messages.status);
   describeDirection();$('download-button').textContent=downloadLabel();
+  const policy=job.sizePolicy,report=$('slide-size-report');report.hidden=!policy;
+  if(policy){const source={original:'원본 PPT 크기', 'first-slide':'첫 장 크기',custom:'사용자 선택'}[policy.source]??'선택한 크기';const inch=n=>Number((n/914400).toFixed(2)),color=(policy.marginColor??'#FFFFFF').toUpperCase();report.textContent=`PPT 크기 ${inch(policy.targetWidthEmu)} × ${inch(policy.targetHeightEmu)}인치 (${source}) · 비율 유지 · 가운데 배치 · 여백 ${color==='#FFFFFF'?'흰색':color}${policy.originalAspectMismatch?' · 원본 PPT 크기 정보와 장표 비율이 다름':''}`;const list=$('slide-size-list');list.replaceChildren();for(const [i,s] of (policy.slides??[]).entries()){const item=document.createElement('li'),scale=Number.isFinite(s.physicalScale)?`PPT 물리 크기 ${Math.round(s.physicalScale*100)}% (CSS 96dpi 기준)`:'PPT 물리 배율 확인 불가',margin=Number.isFinite(s.offsetXEmu)&&Number.isFinite(s.offsetYEmu)?`좌우 여백 각 ${inch(s.offsetXEmu)}인치, 위아래 여백 각 ${inch(s.offsetYEmu)}인치`:'여백 크기 확인 불가';item.textContent=`${i+1}번: ${scale}, ${margin}`;list.append(item);}$('slide-size-details').hidden=!list.children.length;}else $('slide-size-details').hidden=true;
+  if(job.previewKind==='source')$('quality-note').textContent='입력 HTML 미리보기입니다. PPT의 크기와 여백은 위 안내를 확인해 주세요.';
   jobActions();
   $('download-button').disabled=!job.exportAvailable;$('download-button').hidden=Boolean(job.partialExportAvailable);
   $('partial-download-button').hidden=!job.partialExportAvailable;$('partial-download-button').disabled=!job.partialExportAvailable;$('partial-download-note').hidden=!job.partialExportAvailable;
@@ -170,7 +182,7 @@ function showResult(job){
 }
 $('analyze-form').addEventListener('submit',async event=>{
   event.preventDefault();const file=$('html-file').files[0];if(!file||$('analyze-button').disabled)return;
-  const thisRevision=++revision,previousJob=currentJob;controller?.abort();controller=new AbortController();const signal=controller.signal;selectableJobId=null;$('region-reselect-button').hidden=true;busy=true;jobActions();clearDownload();hideRegions();$('preview-area').hidden=true;$('quality-note').hidden=true;$('empty-preview').hidden=false;$('empty-preview').querySelector('p').textContent='입력을 분석하고 있습니다.';$('preview-image').removeAttribute('src');$('analyze-button').disabled=true;$('analyze-button').textContent='장표를 분석하고 있습니다…';status('analyzing','글꼴과 이미지를 읽고 실제 장표 배치를 확인하고 있습니다.');$('diagnostics').hidden=true;$('diagnostics').open=false;
+  const thisRevision=++revision,previousJob=currentJob;controller?.abort();controller=new AbortController();const signal=controller.signal;selectableJobId=null;$('region-reselect-button').hidden=true;$('slide-size-report').hidden=true;$('slide-size-details').hidden=true;busy=true;jobActions();clearDownload();hideRegions();$('preview-area').hidden=true;$('quality-note').hidden=true;$('empty-preview').hidden=false;$('empty-preview').querySelector('p').textContent='입력을 분석하고 있습니다.';$('preview-image').removeAttribute('src');$('analyze-button').disabled=true;$('analyze-button').textContent='장표를 분석하고 있습니다…';status('analyzing','글꼴과 이미지를 읽고 실제 장표 배치를 확인하고 있습니다.');$('diagnostics').hidden=true;$('diagnostics').open=false;
   const noticeTimer=setTimeout(()=>{if(thisRevision===revision&&!signal.aborted&&$('duration-note').hidden){$('duration-note').textContent='장표를 분석하는 데 시간이 걸리고 있어요. 잠시만 기다려 주세요.';$('duration-note').hidden=false;}},20000);
   try{
     rememberCleanup(previousJob);await cleanupOutstanding();
@@ -185,7 +197,7 @@ $('analyze-form').addEventListener('submit',async event=>{
       const html=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(await file.arrayBuffer());
       if(thisRevision===revision&&!signal.aborted)durationNotice(embeddedPageCount(html));
       const assets=await Promise.all(files.map(async f=>({path:f.webkitRelativePath||f.name,mime:f.type,base64:base64(await f.arrayBuffer())})));
-      input={sourceType:'html',html,assets,fileName:file.name,slideSelector:$('selector').value.trim()||null};
+      input={sourceType:'html',html,assets,fileName:file.name,slideSelector:$('selector').value.trim()||null,sizePolicy:selectedSizePolicy()};
     }
     if(thisRevision!==revision||signal.aborted)return;
     const {data:job}=await postJob('/api/analyze',input,signal);
@@ -195,7 +207,7 @@ $('analyze-form').addEventListener('submit',async event=>{
       currentJob=job;jobActions();status('analyzing','장표로 사용할 수 있는 영역을 찾고 있습니다.');
       const removed=await apiPost(`/api/jobs/${job.id}`,undefined,signal,'DELETE');if(thisRevision!==revision||signal.aborted)return;
       if(!removed.ok&&removed.status!==404)throw new Error('이전 분석을 정리하지 못했습니다. 다시 시도해 주세요.');currentJob=null;
-      const inspectionInput={html:input.html,assets:input.assets,fileName:input.fileName,slideSelector:input.slideSelector};
+      const inspectionInput={html:input.html,assets:input.assets,fileName:input.fileName,slideSelector:input.slideSelector,sizePolicy:input.sizePolicy};
       const {response:inspected,data:candidateJob}=await postJob('/api/inspect',inspectionInput,signal);if(thisRevision!==revision||signal.aborted){rememberCleanup(candidateJob);if(cleanupJobs.size||cleanupRequests.size)void cleanupOutstanding().catch(()=>{});return;}
       if(!inspected.ok||!candidateJob.id||!candidateJob.inspection)throw new Error(candidateJob.error??'장표 후보를 확인하지 못했습니다. 다시 분석해 주세요.');
       showRegions(candidateJob);
@@ -252,7 +264,7 @@ async function removeCurrentJob(){
     // Keep the request open until DELETE confirms that the worker has stopped.
     rememberCleanup(job);if(hadJobs)deleted=await cleanupOutstanding();
     request?.abort();if(thisRevision!==revision)return;
-    currentJob=null;selectableJobId=null;$('region-reselect-button').hidden=true;hideRegions();$('preview-area').hidden=true;$('quality-note').hidden=true;$('empty-preview').hidden=false;$('empty-preview').querySelector('p').textContent='입력을 분석하고 있습니다.';$('preview-image').removeAttribute('src');$('diagnostics').hidden=true;$('diagnostic-list').replaceChildren();
+    currentJob=null;selectableJobId=null;$('region-reselect-button').hidden=true;$('slide-size-report').hidden=true;$('slide-size-details').hidden=true;hideRegions();$('preview-area').hidden=true;$('quality-note').hidden=true;$('empty-preview').hidden=false;$('empty-preview').querySelector('p').textContent='입력을 분석하고 있습니다.';$('preview-image').removeAttribute('src');$('diagnostics').hidden=true;$('diagnostic-list').replaceChildren();
     status(deleted?'deleted':'cancelled',deleted?'서버의 작업과 결과를 삭제했습니다. 이미 다운로드한 파일은 남아 있습니다.':hadJobs?'작업을 찾을 수 없습니다. 이미 만료되었거나 정리 중일 수 있습니다.':'취소 요청을 보냈습니다. 서버에서 진행 중인 작업을 정리합니다.');
   }catch(error){if(thisRevision===revision)status('failed',error.message);}
   finally{if(thisRevision===revision){jobActions();$('analyze-button').disabled=!selectedFileState($('html-file').files[0]).valid;$('analyze-button').textContent='입력 다시 분석';}}
