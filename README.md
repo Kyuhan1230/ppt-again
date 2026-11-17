@@ -69,8 +69,10 @@ npm start
 *HTML → PPT 초기 화면 예시입니다. 현재 화면에서는 PPTX도 선택할 수 있습니다.*
 
 1. HTML 또는 PPTX를 선택합니다. HTML에 필요한 이미지와 글꼴은 함께 선택합니다.
-2. 미리보기와 지원 제한을 확인합니다.
-3. 반대 형식의 파일을 내려받습니다. PPT는 PowerPoint에서 수정할 수 있습니다.
+2. 장표가 표시되지 않은 HTML은 후보의 테두리와 범위 밖 내용을 확인한 뒤 변환할 영역을 선택합니다. 한 장으로 담을 수 있는 경우에는 **문서 전체를 한 장으로 만들기**를 선택할 수 있습니다.
+3. 변환 범위와 지원 제한을 확인하고 반대 형식의 파일을 내려받습니다. PPT는 PowerPoint에서 수정할 수 있습니다.
+
+긴 HTML 문서 전체를 나누려면 **추가 자산 · 고급 설정 → HTML 변환 범위 → 문서 전체를 여러 장으로 나누기**를 고르고 다시 분석합니다. 결과에 각 장표가 포함하는 원본 구간과 편집 범위가 표시됩니다. 일반 장표 변환에서는 화면 미리보기와 함께 각 장표의 출력 크기와 여백을 확인할 수 있습니다.
 
 PPTX를 선택하면 현재 장표의 글자와 지원되는 객체를 HTML로 가져옵니다. 가져오기 전에 HTML 글꼴을 **원본 유지 / 맑은 고딕 / Pretendard** 중에서 선택할 수 있습니다. 글꼴 변경은 이름과 스타일에 적용되며 글꼴 설치나 원본과 같은 줄바꿈을 보장하지 않습니다. 선택한 대체 글꼴을 쓸 때 원본 내장 글꼴 파일은 포함하지 않습니다.
 
@@ -84,7 +86,7 @@ PPTX는 **64MiB 이하**를 지원하며 파일을 고르는 화면에서 한도
 
 ## 검증하기
 
-자동 검사는 `npm test`로 실행합니다. PowerPoint가 설치된 Windows에서는 아래 명령으로 가상 HTML과 PPTX를 실제 PowerPoint에서 열어 글머리, 문단 간격과 자간을 검사할 수 있습니다.
+자동 검사는 `npm test`로 실행합니다. 로컬과 Windows CI는 파일마다 브라우저와 작업자가 차례로 실행되도록 같은 순차 명령을 사용합니다. PowerPoint가 설치된 Windows에서는 아래 명령으로 가상 HTML과 PPTX를 실제 PowerPoint에서 열어 글머리, 문단 간격과 자간을 검사할 수 있습니다.
 
 ```powershell
 $env:PPT_AGAIN_OFFICE_TEST = '1'
@@ -107,11 +109,30 @@ npx --no-install ppt-again --help
 
 `--assets`에는 HTML에서 상대 경로로 참조하는 이미지·CSS·글꼴이 들어 있는 폴더를 지정합니다. 해당 폴더는 파일과 하위 폴더를 합쳐 최대 1,024개 항목까지 읽습니다. 지원되는 정적 TTF·WOFF2만 글꼴 포함 대상입니다. 기존 출력 파일은 덮어쓰지 않습니다. `--json`은 표준 출력에 결과 객체 하나를 내보내며 종료 코드는 성공 0, 변환 실패 1, 사용법 오류 2입니다. 원본 스크립트는 실행하지 않고 외부 자산은 내려받지 않습니다. 복잡한 내용은 변환이 거부될 수 있습니다.
 
+표식이 없는 HTML은 후보부터 확인합니다. `candidates.json`의 `choices`에서 변환 가능한 항목의 `id`를 선택한 뒤 변환할 때 같은 입력·자산·화면 크기를 사용합니다.
+
+```sh
+npx --no-install ppt-again inspect report.html --viewport 1280x960 --output candidates.json
+npx --no-install ppt-again convert report.html --viewport 1280x960 --inspection candidates.json --region "선택한 후보 ID" --output selected.pptx
+```
+
+문서 전체를 범위로 쓸 때는 장수를 명시합니다. 선택자, 저장된 후보, 문서 전체 지정 중 하나를 사용합니다.
+
+```sh
+npx --no-install ppt-again convert report.html --scope document --page-mode single --output one-slide.pptx
+npx --no-install ppt-again convert report.html --scope document --page-mode paginate --slide-size 16:9 --output report.pptx --json
+```
+
+PPTX를 HTML로 바꿀 때 `--font-policy original|malgun-gothic|pretendard`로 글꼴을 고를 수 있습니다. `--allow-partial`은 읽을 수 없는 일반 객체를 표시 상자로 남기는 PPTX 가져오기 옵션입니다.
+
+`--slide-size`로 자동, 16:9, 4:3 또는 인치 단위의 `12x8` 같은 크기를 정합니다. HTML 장표마다 원래 크기가 다르면 하나의 PPT 크기에 비율을 유지해 맞춥니다. 긴 문서 분할은 크기를 지정하지 않으면 16:9를 사용합니다. 세부 조건은 [지원 범위](docs/supported-inputs.md#긴-html-문서-분할)를 확인하세요.
+
 ## 지금 할 수 있는 일
 
 | 입력과 내용 | 출력 |
 | --- | --- |
-| 크기가 정해진 HTML 장표 | 원본 비율을 유지한 PPT |
+| 장표가 표시되거나 변환할 범위를 선택한 HTML | 원본 비율을 유지해 공통 크기에 맞춘 PPT |
+| 문서 전체를 여러 장으로 나누도록 지정한 정적 HTML | 지원되는 문단·표·그림을 경계에서 나눈 PPT |
 | 장표 크기의 SVG | 장표 자동 탐색, 여러 장을 한 파일로 출력 |
 | 지원되는 글자·기본 도형·선 | PowerPoint에서 수정 가능한 객체 |
 | 일반·병합 표 | 셀과 행·열을 수정할 수 있는 PowerPoint 표 |

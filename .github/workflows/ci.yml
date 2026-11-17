@@ -26,7 +26,7 @@ jobs:
       - run: npm ci
       # Each file launches browsers and worker observers; parallel files can
       # exhaust a hosted runner and trip the application's resource watchdog.
-      - run: node --test --test-concurrency=1 tests/*.test.mjs
+      - run: npm test
         id: tests
       - name: Report sanitized test errors
         if: failure() && steps.tests.outcome == 'failure'
