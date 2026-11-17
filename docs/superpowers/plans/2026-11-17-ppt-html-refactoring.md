@@ -258,12 +258,12 @@ node --test tests/pptx-object-identity-roundtrip.test.mjs tests/text-shape-html.
 
 **수정:** `read-pptx.mjs`; **신규 제안:** `pptx-package-reader.mjs`, `pptx-slide-reader.mjs`, `pptx-object-readers.mjs`; **재사용:** `package-budget.mjs`, `read-table.mjs`, `read-chart.mjs`.
 
-- [ ] 파일 구조·압축 예산·관계 검사를 먼저 분리하되 기존 오류 코드와 차단 순서를 유지한다.
-- [ ] 사용하지 않은 관계, 내장 XLSX/차트 패키지까지 검사한다. PPT와 XLSX는 기존 공유 압축 예산과 차트 점수 제한을 쓰고, 마지막 전체 패키지 관계 검사를 삭제하거나 방문한 객체만 검사하는 방식으로 좁히지 않는다.
-- [ ] 장표 목록과 마스터·레이아웃·테마 준비를 분리한다. 마스터 → 레이아웃 → 장표의 그림 순서와 속성 상속을 유지한다.
-- [ ] 공통 순회가 객체 ID·진단 문맥·그룹 좌표를 관리하게 하고, 그림·도형/글자별 읽기를 작은 함수로 옮긴다. 표·차트는 기존 모듈을 호출한다.
-- [ ] 차트 이미지 대체는 패키지와 차트 데이터 검증 이후에만 실행한다. `allowPartial`로 안전·구조 오류를 낮추지 않는다.
-- [ ] PPT 분석의 기존 경로인 `readPptx → exportHtml → 생성 HTML 재분석`은 프로젝트가 만든 검증된 HTML 프로필을 사용한다. 새로운 일반 HTML 후보 판단이 이 경로의 장표를 다시 모호하게 만들지 않게 한다. 미리보기만 실패한 경우와 HTML 변환 자체 실패를 구분하고 부분 복구 진단을 유지한다.
+- [x] 파일 구조·압축 예산·관계 검사를 먼저 분리하되 기존 오류 코드와 차단 순서를 유지한다.
+- [x] 사용하지 않은 관계, 내장 XLSX/차트 패키지까지 검사한다. PPT와 XLSX는 기존 공유 압축 예산과 차트 점수 제한을 쓰고, 마지막 전체 패키지 관계 검사를 삭제하거나 방문한 객체만 검사하는 방식으로 좁히지 않는다.
+- [x] 장표 목록과 마스터·레이아웃·테마 준비를 분리한다. 마스터 → 레이아웃 → 장표의 그림 순서와 속성 상속을 유지한다.
+- [x] 공통 순회가 객체 ID·진단 문맥·그룹 좌표를 관리하게 하고, 그림·도형/글자별 읽기를 작은 함수로 옮긴다. 표·차트는 기존 모듈을 호출한다.
+- [x] 차트 이미지 대체는 패키지와 차트 데이터 검증 이후에만 실행한다. `allowPartial`로 안전·구조 오류를 낮추지 않는다.
+- [x] PPT 분석의 기존 경로인 `readPptx → exportHtml → 생성 HTML 재분석`은 프로젝트가 만든 검증된 HTML 프로필을 사용한다. 새로운 일반 HTML 후보 판단이 이 경로의 장표를 다시 모호하게 만들지 않게 한다. 미리보기만 실패한 경우와 HTML 변환 자체 실패를 구분하고 부분 복구 진단을 유지한다.
 
 ```powershell
 node --test tests/roundtrip.test.mjs tests/pptx-fatal-diagnostics.test.mjs tests/pptx-nested-groups.test.mjs tests/pptx-object-identity-roundtrip.test.mjs
