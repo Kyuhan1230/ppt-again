@@ -10,7 +10,7 @@ const validViewport=v=>v&&Number.isSafeInteger(v.width)&&Number.isSafeInteger(v.
 
 // Inspection is a separate operation from conversion: it can succeed even
 // when the current measurement engine cannot convert a proposed scope.
-export async function inspectInput(input,runtime,{viewport={width:1280,height:960}}={}){
+export async function inspectInput(input,runtime,{viewport={width:1280,height:960},session:providedSession=null,includePrivate=false,includePreview=false}={}){
   if(!input?.source||!runtime||!validViewport(viewport))throw invalid('INPUT_INVALID');
   if(input.diagnostics?.some(d=>d.severity==='error'))throw invalid('INPUT_INVALID');
   if(input.embeddedSlides){
@@ -29,9 +29,9 @@ export async function inspectInput(input,runtime,{viewport={width:1280,height:96
     choices.push({id:token('c',snapshotId,'pages'),scope:'elements',regionIds:regions.map(r=>r.id),evidence:['validated-embedded-slides'],outsideContentCount:0,outsideContentCountAccuracy:'estimate',convertible:false,reasons});
     return {snapshotId,regions,choices,uncertainties:[...new Set(['embedded-documents-have-separate-viewports',...pages.flatMap(p=>p.uncertainties)])].sort()};
   }
-  let session;
+  let session=providedSession,preview=null;
   try{
-    session=await runtime.render(input,{viewport});
+    session??=await runtime.render(input,{viewport});
     const fallback=input.profile==='static-slides-v1'?await applyFallbackFont(session.page,installedNativeAliases()):[];
     await session.page.evaluate(()=>document.fonts.ready);
     let observed;
@@ -53,7 +53,7 @@ export async function inspectInput(input,runtime,{viewport={width:1280,height:96
       try{
         const image=await session.page.screenshot({fullPage:true,animations:'disabled',scale:'css',timeout:runtime.timeoutMs});
         if(image.byteLength>16*1024*1024)observed.uncertainties.push('render-pixels-not-fully-observed');
-        else observed.fingerprint.renderHash=sha256(image);
+        else {observed.fingerprint.renderHash=sha256(image);if(includePreview)preview=new Uint8Array(image);}
       }catch{observed.uncertainties.push('render-pixels-not-fully-observed');}
     }
     if(runtime.limitExceeded)throw invalid('INPUT_LIMIT');
@@ -64,8 +64,24 @@ export async function inspectInput(input,runtime,{viewport={width:1280,height:96
     const snapshotId=`s-${digest({version:1,source:input.source.sha256,providedAssetsHash:input.source.providedAssetsHash,profile:input.profile,selector:input.source.slideSelector,allowTableOverlay:input.allowTableOverlay,assets:input.assets.map(a=>[a.path,a.mime,a.sha256]).sort(),references:input.assetRefs.map(r=>[r.url,r.basePath,r.assetId,r.usage]),viewport,environment:runtime.environment,fallback:fallback.map(f=>f.sha256),observed})}`;
     const ids=observed.regions.map((_,i)=>token('r',snapshotId,i));
     const regions=observed.regions.map(r=>({id:ids[r.index],bounds:r.bounds,visibility:r.visibility,parentId:r.parent===null?null:ids[r.parent],overlaps:r.overlaps.map(i=>ids[i]),evidence:r.evidence}));
-    const reasons=['conversion-selection-not-connected'];
-    const choices=[];
+    const choices=[],privateChoices=new Map();
+    const conversionReason=indexes=>{
+      if(input.profile!=='static-slides-v1')return 'profile-not-supported';
+      if(observed.uncertainties.some(reason=>['layout-may-change','resource-not-ready','render-pixels-not-fully-observed'].includes(reason)))return 'inspection-incomplete';
+      if(!indexes.length||indexes.length>200)return 'too-many-slides';
+      const rs=indexes.map(i=>observed.regions[i]);
+      if(rs.some(r=>!r?.bounds||r.visibility==='hidden'||r.visibility==='unmeasured'))return 'hidden-or-unmeasured';
+      if(rs.some(r=>!r.fixed))return 'size-not-fixed';
+      if(rs.some(r=>r.rootSizeMismatch))return 'root-size-mismatch';
+      if(rs.some(r=>r.rootAppearance))return 'root-appearance-not-supported';
+      if(rs.some(r=>r.ancestorAppearance))return 'ancestor-appearance-not-supported';
+      if(rs.some(r=>r.externalOverlap||r.externalComplex))return 'external-overlay-not-supported';
+      if(rs.some(r=>r.bounds.width>8192||r.bounds.height>8192||r.bounds.width*r.bounds.height>8000000)||rs.reduce((sum,r)=>sum+r.bounds.width*r.bounds.height,0)>32000000)return 'selection-too-large';
+      if(rs.some(r=>Math.abs(r.bounds.width-rs[0].bounds.width)>.01||Math.abs(r.bounds.height-rs[0].bounds.height)>.01))return 'different-sizes';
+      if(rs.some((r,i)=>rs.some((other,j)=>i!==j&&(r.overlaps.includes(other.index)||other.parent===r.index||r.parent===other.index))))return 'overlap-or-nesting';
+      return null;
+    };
+    const addChoice=(choice,indexes)=>{const reason=conversionReason(indexes);choice.convertible=!reason;choice.reasons=reason?[reason]:[];choices.push(choice);privateChoices.set(choice.id,indexes.map(i=>observed.regions[i].selector));};
     const equivalent=new Map(),leader=observed.regions.map((_,i)=>i);
     const find=i=>{while(leader[i]!==i)i=leader[i];return i;};
     for(const r of observed.regions){
@@ -87,15 +103,28 @@ export async function inspectInput(input,runtime,{viewport={width:1280,height:96
     }
     for(const r of observed.regions){
       if(duplicate.has(r.index))continue;
-      choices.push({id:token('c',snapshotId,`region:${r.index}`),scope:'elements',regionIds:[ids[r.index]],...(equivalent.has(r.index)?{equivalentRegionIds:equivalent.get(r.index).map(i=>ids[i])}:{}),evidence:r.evidence,outsideContentCount:r.outsideCount,outsideContentCountAccuracy:'estimate',convertible:false,reasons});
+      addChoice({id:token('c',snapshotId,`region:${r.index}`),scope:'elements',regionIds:[ids[r.index]],...(equivalent.has(r.index)?{equivalentRegionIds:equivalent.get(r.index).map(i=>ids[i])}:{}),evidence:r.evidence,outsideContentCount:r.outsideCount,outsideContentCountAccuracy:'estimate'},[r.index]);
     }
     for(const [groupIndex,indexes] of observed.groups.entries()){
-      choices.push({id:token('c',snapshotId,`group:${indexes.join(',')}`),scope:'elements',regionIds:indexes.map(i=>ids[i]),evidence:['repeated-sibling'],outsideContentCount:observed.groupOutsideCounts[groupIndex],outsideContentCountAccuracy:'estimate',convertible:false,reasons});
+      addChoice({id:token('c',snapshotId,`group:${indexes.join(',')}`),scope:'elements',regionIds:indexes.map(i=>ids[i]),evidence:['repeated-sibling'],outsideContentCount:observed.groupOutsideCounts[groupIndex],outsideContentCountAccuracy:'estimate'},indexes);
     }
     choices.sort((a,b)=>{const priority=c=>c.evidence.includes('explicit-selector')?0:c.evidence.includes('declared-slide')||c.evidence.includes('validated-svg')?1:c.evidence.includes('repeated-sibling')?2:3;return priority(a)-priority(b);});
-    choices.push({id:token('c',snapshotId,'document'),scope:'document',regionIds:[],bounds:observed.documentBounds,evidence:['document'],outsideContentCount:0,convertible:false,reasons});
-    return {snapshotId,regions,choices,uncertainties:observed.uncertainties};
-  }finally{await session?.context.close();}
+    const documentChoice={id:token('c',snapshotId,'document'),scope:'document',regionIds:[],bounds:observed.documentBounds,evidence:['document'],outsideContentCount:0,convertible:false,reasons:[]};
+    const root=observed.documentRoot;
+    if(input.profile!=='static-slides-v1')documentChoice.reasons=['profile-not-supported'];
+    else if(observed.uncertainties.some(reason=>['layout-may-change','resource-not-ready','render-pixels-not-fully-observed'].includes(reason)))documentChoice.reasons=['inspection-incomplete'];
+    else if(!root.fixed)documentChoice.reasons=['document-size-not-fixed'];
+    else if(root.rootSizeMismatch)documentChoice.reasons=['root-size-mismatch'];
+    else if(root.rootAppearance)documentChoice.reasons=['root-appearance-not-supported'];
+    else if(root.ancestorAppearance)documentChoice.reasons=['ancestor-appearance-not-supported'];
+    else if(!['x','y','width','height'].every(k=>Math.abs(root.bounds[k]-bounds[k])<.01))documentChoice.reasons=['document-bounds-do-not-match'];
+    else {documentChoice.convertible=true;privateChoices.set(documentChoice.id,[root.selector]);}
+    choices.push(documentChoice);
+    const result={snapshotId,regions,choices,uncertainties:observed.uncertainties};
+    if(includePrivate)result.private={choiceSelectors:Object.fromEntries(privateChoices),fallbackFonts:fallback};
+    if(includePreview)result.preview=preview;
+    return result;
+  }finally{if(!providedSession)await session?.context.close();}
 }
 
 // Only the IDs are accepted from the caller. The candidate is reconstructed

@@ -2,7 +2,7 @@ import {fork,execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import fs from 'node:fs/promises';
 const execute=promisify(execFile),MiB=1024*1024;
-const operations=new Set(['analyze-html','inspect-html','verify-html-selection','analyze-pptx','export-pptx','read-pptx','export-html']);
+const operations=new Set(['analyze-html','inspect-html','verify-html-selection','analyze-html-selection','analyze-pptx','export-pptx','read-pptx','export-html']);
 // The observed worker and browser memory budget is 2 GiB; sampling can
 // briefly overshoot it and is not an OS-enforced memory cap.
 export const conversionLimits=Object.freeze({timeoutMs:180000,oldSpaceMb:512,maxRssBytes:2048*MiB,rssIntervalMs:1000,closeGraceMs:1000});
@@ -12,16 +12,16 @@ const failure=(code,statusCode=400,cause)=>Object.assign(new Error(code,{cause})
 // These checks run before fork. No input can select a program, handler or limits.
 function validateInput(operation,input){
   if(!operations.has(operation))throw failure('INPUT_INVALID');
-  if(operation==='analyze-html'||operation==='inspect-html'||operation==='verify-html-selection'){
+  if(operation==='analyze-html'||operation==='inspect-html'||operation==='verify-html-selection'||operation==='analyze-html-selection'){
     if(!input||typeof input.html!=='string'||!Array.isArray(input.assets??[]))throw failure('INPUT_INVALID');
     if(operation!=='analyze-html'){
-      const allowed=new Set(['html','assets','slideSelector','allowTableOverlay','viewport',...(operation==='verify-html-selection'?['snapshotId','choiceId']:[])]);
+      const allowed=new Set(['html','assets','slideSelector','allowTableOverlay','viewport',...(['verify-html-selection','analyze-html-selection'].includes(operation)?['snapshotId','choiceId']:[])]);
       if(Object.keys(input).some(key=>!allowed.has(key))||(input.assets??[]).length>4096)throw failure('INPUT_INVALID');
       if(input.viewport!==undefined&&(!input.viewport||Object.keys(input.viewport).some(key=>!['width','height'].includes(key))||!Number.isSafeInteger(input.viewport.width)||!Number.isSafeInteger(input.viewport.height)||input.viewport.width<1||input.viewport.height<1||input.viewport.width>8192||input.viewport.height>8192))throw failure('INPUT_INVALID');
       if(input.slideSelector!==undefined&&input.slideSelector!==null&&(typeof input.slideSelector!=='string'||input.slideSelector.length>4096))throw failure('INPUT_INVALID');
       if(input.allowTableOverlay!==undefined&&typeof input.allowTableOverlay!=='boolean')throw failure('INPUT_INVALID');
     }
-    if(operation==='verify-html-selection'&&(typeof input.snapshotId!=='string'||input.snapshotId.length>128||typeof input.choiceId!=='string'||input.choiceId.length>128))throw failure('INPUT_INVALID');
+    if(['verify-html-selection','analyze-html-selection'].includes(operation)&&(typeof input.snapshotId!=='string'||input.snapshotId.length>128||typeof input.choiceId!=='string'||input.choiceId.length>128))throw failure('INPUT_INVALID');
     if(Buffer.byteLength(input.html)>16*MiB)throw failure('INPUT_LIMIT',413);
     let total=0;
     for(const asset of input.assets??[]){
@@ -208,7 +208,7 @@ export async function runConversion({input,operation,signal,limits={}}={}){
       if(message?.type==='browser'&&Number.isSafeInteger(message.pid)&&message.pid>0){resourceUsage.browserPid=message.pid;sample();}
       if(stoppedAt!==null)return;
       if(message?.type==='result')result=message.result;
-      if(message?.type==='error')stop(failure(['INPUT_LIMIT','INPUT_INVALID','STALE_INSPECTION','JOB_CLEANUP_FAILED'].includes(message.code)?message.code:'JOB_FAILED',message.code==='INPUT_LIMIT'?413:message.code==='STALE_INSPECTION'?409:500,message.error));
+      if(message?.type==='error'){const failed=failure(['INPUT_LIMIT','INPUT_INVALID','STALE_INSPECTION','REGION_UNSUPPORTED','JOB_CLEANUP_FAILED'].includes(message.code)?message.code:'JOB_FAILED',message.code==='INPUT_LIMIT'?413:message.code==='INPUT_INVALID'?400:message.code==='STALE_INSPECTION'?409:message.code==='REGION_UNSUPPORTED'?422:500,message.error);if(Array.isArray(message.diagnostics))failed.diagnostics=message.diagnostics;stop(failed);}
     });
     child.once('error',cause=>stop(failure('JOB_FAILED',500,cause)));
     child.once('close',async code=>{

@@ -1,6 +1,6 @@
 // This function is serialized by Playwright and runs entirely in the page.
 // It does not mutate the source DOM or return text, selectors or paths.
-export function scanHtmlRegions({selector,svgPaths=[],maxRegions=500,maxRelations=50000}={}){
+export function scanHtmlRegions({selector,svgPaths=[],maxRegions=500,maxRelations=50000,onlyExplicit=false}={}){
   const fail=()=>{throw new Error('INPUT_LIMIT');};
   const body=document.body,viewport={width:innerWidth,height:innerHeight};
   const all=[...body.querySelectorAll('*')];if(all.length>100000)fail();
@@ -15,7 +15,7 @@ export function scanHtmlRegions({selector,svgPaths=[],maxRegions=500,maxRelation
   const validatedSvg=new Set(all.filter(el=>el.localName==='svg'&&svgPaths.includes(el.dataset.sourcePath)));
   const stats=new WeakMap(),state=new WeakMap(),children=new Map(),uncertainties=new Set();
   const sources=[document.documentElement,body,...all];
-  const domIndex=new WeakMap(sources.map((el,i)=>[el,i])),subtreeEnd=sources.map((_,i)=>i),footprints=[];
+  const domIndex=new WeakMap(sources.map((el,i)=>[el,i])),subtreeEnd=sources.map((_,i)=>i),footprints=[],complexPaint=[];
   for(let i=sources.length-1;i>0;i--){const parent=domIndex.get(sources[i].parentElement);if(parent!==undefined)subtreeEnd[parent]=Math.max(subtreeEnd[parent],subtreeEnd[i]);}
   const clippedRect=(r,c)=>{const left=Math.max(r.left,c.left),right=Math.min(r.right,c.right),top=Math.max(r.top,c.top),bottom=Math.min(r.bottom,c.bottom);return right>left&&bottom>top?{left,top,right,bottom}:null;};
   const transparent=color=>color==='transparent'||/^rgba\([^)]*[, /]\s*0(?:\.0+)?\s*\)$/.test(color);
@@ -42,11 +42,21 @@ export function scanHtmlRegions({selector,svgPaths=[],maxRegions=500,maxRelation
     if(s.boxShadow!=='none'||s.outlineStyle!=='none'&&parseFloat(s.outlineWidth)>0)uncertainties.add('css-compositing-not-fully-observed');
     if(s.animationName!=='none'||s.transitionDuration.split(',').some(x=>parseFloat(x)>0))uncertainties.add('layout-may-change');
     let hasPseudo=false;for(const pseudo of ['::before','::after']){const p=getComputedStyle(el,pseudo);if(p.content!=='none'&&p.content!=='normal'&&p.display!=='none'){hasPseudo=true;uncertainties.add('generated-content-not-fully-observed');break;}}
+    const coloredBorder=['Top','Right','Bottom','Left'].some(side=>parseFloat(s[`border${side}Width`])>0&&s[`border${side}Style`]!=='none'&&!transparent(s[`border${side}Color`]));
+    const ownBackground=s.backgroundImage!=='none'||!transparent(s.backgroundColor)&&s.backgroundColor!=='rgb(255, 255, 255)';
+    const ownEffects=Number(s.opacity)<1||s.transform!=='none'||s.filter!=='none'||s.maskImage!=='none'||s.clipPath!=='none'||s.mixBlendMode!=='normal'||s.boxShadow!=='none'||s.outlineStyle!=='none'&&parseFloat(s.outlineWidth)>0||coloredBorder||hasPseudo||clips(s.overflowX)||clips(s.overflowY);
+    state.get(el).ancestorEffects=Boolean(ps?.ancestorEffects||ownEffects);
+    state.get(el).ancestorBackground=Boolean(ps?.ancestorBackground||ownBackground);
+    const paintedBackground=s.backgroundImage!=='none'||!transparent(s.backgroundColor);
+    const rounded=['borderTopLeftRadius','borderTopRightRadius','borderBottomRightRadius','borderBottomLeftRadius'].some(key=>parseFloat(s[key])!==0);
+    const clippedBackground=!s.backgroundClip.split(',').every(value=>value.trim()==='border-box');
+    state.get(el).rootAppearance=Boolean(paintedBackground&&(rounded||clippedBackground)||coloredBorder||hasPseudo||Number(s.opacity)!==1||s.filter!=='none'||s.maskImage!=='none'||s.clipPath!=='none'||s.mixBlendMode!=='normal'||s.boxShadow!=='none'||s.outlineStyle!=='none'&&parseFloat(s.outlineWidth)>0);
+    if(!hidden&&(hasPseudo||s.boxShadow!=='none'||s.outlineStyle!=='none'&&parseFloat(s.outlineWidth)>0||s.filter!=='none'||s.maskImage!=='none'||s.clipPath!=='none'||s.mixBlendMode!=='normal'))complexPaint.push(domIndex.get(el));
     if(ignored.has(el.localName)||inSvg&&el.localName!=='svg'){stats.set(el,{count:0,text:0,media:0,paint:0});continue;}
     const textVisible=!transparent(s.webkitTextFillColor)||parseFloat(s.webkitTextStrokeWidth)>0&&!transparent(s.webkitTextStrokeColor)||s.textShadow!=='none';
     let text=0;for(const n of el.childNodes)if(n.nodeType===Node.TEXT_NODE&&n.data.trim()){
       totalText+=n.data.length;if(n.data.length>100000||totalText>2000000)fail();
-      if(textVisible&&!hidden){const range=document.createRange();range.selectNodeContents(n);const rects=range.getClientRects();if((textRectBudget+=rects.length)>50000)fail();const visible=[...rects].map(r=>clippedRect(r,clipBounds)).filter(Boolean);if(visible.length){text++;footprints.push({owner:domIndex.get(el),rects:visible});}}
+      if(textVisible&&!hidden){const range=document.createRange();range.selectNodeContents(n);const rects=range.getClientRects();if((textRectBudget+=rects.length)>50000)fail();const visible=[...rects].map(r=>clippedRect(r,clipBounds)).filter(Boolean);if(visible.length){text++;footprints.push({owner:domIndex.get(el),kind:'text',rects:visible});}}
     }
     const ownRect=el.getBoundingClientRect(),parentClip=ps?.clipBounds??{left:-Infinity,top:-Infinity,right:Infinity,bottom:Infinity};
     state.get(el).area=ownRect.width*ownRect.height;
@@ -54,7 +64,7 @@ export function scanHtmlRegions({selector,svgPaths=[],maxRegions=500,maxRelation
     const boxVisible=ownRect.width>0&&ownRect.height>0&&ownRect.right>parentClip.left&&ownRect.left<parentClip.right&&ownRect.bottom>parentClip.top&&ownRect.top<parentClip.bottom;
     const media=boxVisible&&el.matches('img,svg,video,canvas,iframe,object,embed')?1:0;
     const paint=boxVisible&&(s.backgroundImage!=='none'||!transparent(s.backgroundColor)&&!(el===body&&s.backgroundColor==='rgb(255, 255, 255)')||['Top','Right','Bottom','Left'].some(side=>parseFloat(s[`border${side}Width`])>0&&s[`border${side}Style`]!=='none'&&!transparent(s[`border${side}Color`])))?1:0;
-    if(!hidden&&(media||paint))footprints.push({owner:domIndex.get(el),rects:[clippedRect(ownRect,parentClip)]});
+    if(!hidden&&(media||paint))footprints.push({owner:domIndex.get(el),kind:'paint',rects:[clippedRect(ownRect,parentClip)]});
     state.get(el).neutral=!(text||media||paint||hasPseudo)&&s.opacity==='1'&&s.transform==='none'&&s.filter==='none'&&s.maskImage==='none'&&s.clipPath==='none'&&s.mixBlendMode==='normal'&&s.boxShadow==='none'&&s.outlineStyle==='none'&&s.overflowX==='visible'&&s.overflowY==='visible';
     stats.set(el,{count:hidden?0:text+media+paint,text:hidden?0:text,media:hidden?0:media,paint:hidden?0:paint});
     if(parent){if(!children.has(parent))children.set(parent,[]);children.get(parent).push(el);}
@@ -69,7 +79,7 @@ export function scanHtmlRegions({selector,svgPaths=[],maxRegions=500,maxRelation
     // additional guessed slides. An explicit selector or declaration still
     // creates a candidate inside that root.
     const declaredObject=st.withinDeclared&&!isMarked;
-    const candidate=isMarked||!declaredObject&&(((structural.has(el.localName)||el.parentElement===body||significantText)&&(stat.count||st.hidden||st.display==='contents'))||(!st.hidden&&(el.matches('img,svg,video,canvas')||stat.paint&&(children.get(el)?.length??0)===0)));
+    const candidate=onlyExplicit?explicitSet.has(el):isMarked||!declaredObject&&(((structural.has(el.localName)||el.parentElement===body||significantText)&&(stat.count||st.hidden||st.display==='contents'))||(!st.hidden&&(el.matches('img,svg,video,canvas')||stat.paint&&(children.get(el)?.length??0)===0)));
     if(candidate){selected.push(el);if(selected.length>maxRegions)fail();}
     else if(stat.count&&(declaredObject||textBlocks.has(el.localName)))uncertainties.add(declaredObject?'objects-inside-declared-slide-not-separate-candidates':'small-elements-not-proposed');
   }
@@ -77,6 +87,10 @@ export function scanHtmlRegions({selector,svgPaths=[],maxRegions=500,maxRelation
   if(explicitSet.has(document.documentElement))selected.unshift(document.documentElement);
   if(selected.length>maxRegions)fail();
   const index=new Map(selected.map((el,i)=>[el,i]));
+  const childNumber=new WeakMap(),childCount=new WeakMap();
+  for(const el of sources){const p=el.parentElement;if(p){const n=(childCount.get(p)??0)+1;childCount.set(p,n);childNumber.set(el,p===document.documentElement?[...p.children].indexOf(el)+1:n);}}
+  let selectorWork=0;
+  const internalSelector=el=>{const parts=[];for(let p=el;p;p=p.parentElement){if(++selectorWork>200000)fail();parts.unshift(CSS.escape(p.localName)+':nth-child('+(childNumber.get(p)??1)+')');}return parts.join(' > ');};
   const nearest=new WeakMap(),parentIndex=new WeakMap();
   for(const el of sources){const parent=el.parentElement?nearest.get(el.parentElement)??null:null;parentIndex.set(el,parent);nearest.set(el,index.has(el)?index.get(el):parent);}
   const raw=selected.map((el,i)=>{
@@ -98,7 +112,12 @@ export function scanHtmlRegions({selector,svgPaths=[],maxRegions=500,maxRelation
       }
     }
     const signature=box&&layoutComparable&&features.length<=32?JSON.stringify(features):null;
-    return {index:i,parent:parentIndex.get(el),directParent:index.has(el.parentElement),neutralWrapper:st.neutral&&(children.get(el)?.length??0)===1,bounds:box,visibility,evidence,counts:{...stat},overlaps:[],tag:el.localName,signature};
+    const ancestor=state.get(el.parentElement),opaqueBackground=/^rgb\(/.test(s.backgroundColor)&&s.backgroundClip.split(',').every(value=>value.trim()==='border-box')&&['borderTopLeftRadius','borderTopRightRadius','borderBottomRightRadius','borderBottomLeftRadius'].every(key=>parseFloat(s[key])===0)&&s.opacity==='1'&&s.filter==='none'&&s.maskImage==='none'&&s.clipPath==='none'&&s.mixBlendMode==='normal';
+    const ancestorAppearance=Boolean(ancestor?.ancestorEffects||ancestor?.ancestorBackground&&!opaqueBackground);
+    const specifiedWidth=el.computedStyleMap?.().get('width')?.toString(),specifiedHeight=el.computedStyleMap?.().get('height')?.toString();
+    const fixed=Boolean(box&&/^\d+(?:\.\d+)?px$/.test(specifiedWidth??'')&&/^\d+(?:\.\d+)?px$/.test(specifiedHeight??'')&&s.transform==='none');
+    const rootSizeMismatch=s.boxSizing==='content-box'&&['paddingLeft','paddingRight','paddingTop','paddingBottom','borderLeftWidth','borderRightWidth','borderTopWidth','borderBottomWidth'].some(key=>parseFloat(s[key])>0);
+    return {index:i,selector:internalSelector(el),fixed,rootSizeMismatch,ancestorAppearance,rootAppearance:st.rootAppearance,parent:parentIndex.get(el),directParent:index.has(el.parentElement),neutralWrapper:st.neutral&&(children.get(el)?.length??0)===1,bounds:box,visibility,evidence,counts:{...stat},overlaps:[],tag:el.localName,signature};
   });
   const ancestors=raw.map(r=>{const found=new Set();for(let p=r.parent;p!==null;p=raw[p].parent)found.add(p);return found;});
   const isAncestor=(a,b)=>ancestors[b].has(a);
@@ -124,7 +143,15 @@ export function scanHtmlRegions({selector,svgPaths=[],maxRegions=500,maxRelation
     if(!fullyInside)uncertainties.add('descendant-extends-outside-candidate');
     return fullyInside;
   };
-  for(const region of raw)region.outsideCount=footprints.filter(f=>!insideCandidate(f,region.index)).length;
+  if(raw.length*complexPaint.length>2000000)fail();
+  for(const region of raw){
+    region.outsideCount=footprints.filter(f=>!insideCandidate(f,region.index)).length;
+    const root=selected[region.index],start=domIndex.get(root),end=subtreeEnd[start],box=region.bounds;
+    const inRoot=owner=>owner>=start&&owner<=end;
+    const isAncestorOwner=owner=>owner<start&&subtreeEnd[owner]>=start;
+    region.externalOverlap=Boolean(box&&footprints.some(f=>!inRoot(f.owner)&&(!isAncestorOwner(f.owner)||f.kind==='text')&&f.rects.some(r=>r.right+scrollX>box.x&&r.left+scrollX<box.x+box.width&&r.bottom+scrollY>box.y&&r.top+scrollY<box.y+box.height)));
+    region.externalComplex=complexPaint.some(owner=>!inRoot(owner)&&!isAncestorOwner(owner));
+  }
   const groupOutsideCounts=groups.map(group=>footprints.filter(f=>!group.some(i=>insideCandidate(f,i))).length);
   const textRects=[];let rectCount=0,minX=0,minY=0,maxX=Math.max(document.documentElement.scrollWidth,body.scrollWidth,innerWidth),maxY=Math.max(document.documentElement.scrollHeight,body.scrollHeight,innerHeight);
   for(const r of raw)if(r.bounds){minX=Math.min(minX,r.bounds.x);minY=Math.min(minY,r.bounds.y);maxX=Math.max(maxX,r.bounds.x+r.bounds.width);maxY=Math.max(maxY,r.bounds.y+r.bounds.height);}
@@ -137,5 +164,9 @@ export function scanHtmlRegions({selector,svgPaths=[],maxRegions=500,maxRelation
   }
   const images=[...document.images].map(img=>[img.complete,img.naturalWidth,img.naturalHeight]);
   const fonts=[...document.fonts].map(f=>[f.family,f.style,f.weight,f.status]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
-  return {viewport,regions:raw,groups,groupOutsideCounts,documentBounds:{x:minX,y:minY,width:maxX-minX,height:maxY-minY},documentCount:stats.get(body).count,uncertainties:[...uncertainties].sort(),fingerprint:{textRects,images,fonts}};
+  const bodyStyle=getComputedStyle(body),bodyWidth=body.computedStyleMap?.().get('width')?.toString(),bodyHeight=body.computedStyleMap?.().get('height')?.toString(),bodyRect=body.getBoundingClientRect();
+  const documentOpaque=/^rgb\(/.test(bodyStyle.backgroundColor)&&bodyStyle.backgroundClip.split(',').every(value=>value.trim()==='border-box')&&['borderTopLeftRadius','borderTopRightRadius','borderBottomRightRadius','borderBottomLeftRadius'].every(key=>parseFloat(bodyStyle[key])===0)&&bodyStyle.opacity==='1'&&bodyStyle.filter==='none'&&bodyStyle.maskImage==='none'&&bodyStyle.clipPath==='none'&&bodyStyle.mixBlendMode==='normal';
+  const documentAncestor=state.get(body.parentElement);
+  const documentRoot={selector:internalSelector(body),rootSizeMismatch:bodyStyle.boxSizing==='content-box'&&['paddingLeft','paddingRight','paddingTop','paddingBottom','borderLeftWidth','borderRightWidth','borderTopWidth','borderBottomWidth'].some(key=>parseFloat(bodyStyle[key])>0),fixed:/^\d+(?:\.\d+)?px$/.test(bodyWidth??'')&&/^\d+(?:\.\d+)?px$/.test(bodyHeight??'')&&bodyStyle.transform==='none',rootAppearance:state.get(body).rootAppearance,ancestorAppearance:Boolean(documentAncestor?.ancestorEffects||documentAncestor?.ancestorBackground&&!documentOpaque),bounds:{x:bodyRect.x+scrollX,y:bodyRect.y+scrollY,width:bodyRect.width,height:bodyRect.height}};
+  return {viewport,regions:raw,groups,groupOutsideCounts,documentRoot,documentBounds:{x:minX,y:minY,width:maxX-minX,height:maxY-minY},documentCount:stats.get(body).count,uncertainties:[...uncertainties].sort(),fingerprint:{textRects,images,fonts}};
 }
