@@ -12,7 +12,8 @@ export async function createBrowserRuntime({channel='msedge',executablePath,capt
   let closing,limitExceeded=false;
   const environment={node:process.version,os:{platform:os.platform(),release:os.release()},browser:browser.version(),channel:executablePath?'explicit executable':channel,dpr:1,sourceScriptsExecuted:false,networkPolicy:'document and verified supplied fonts only; external requests blocked'};
   return {capture,timeoutMs,environment,get limitExceeded(){return limitExceeded;},
-    async render(input){
+    async render(input,{viewport={width:1280,height:960}}={}){
+      if(!viewport||!Number.isSafeInteger(viewport.width)||!Number.isSafeInteger(viewport.height)||viewport.width<1||viewport.height<1||viewport.width>8192||viewport.height>8192)throw Object.assign(new Error('INPUT_INVALID'),{code:'INPUT_INVALID'});
       const fontUrls=new Map();
       for(const ref of input.assetRefs.filter(r=>r.usage==='font')){
         const asset=input.assets.find(a=>a.id===ref.assetId);
@@ -20,7 +21,7 @@ export async function createBrowserRuntime({channel='msedge',executablePath,capt
         fontUrls.set(`https://html-input.invalid/fonts/${asset.id}`,asset);
       }
       const rendered=renderInput(input,{fontAssetUrl:asset=>fontUrls.has(`https://html-input.invalid/fonts/${asset.id}`)?`https://html-input.invalid/fonts/${asset.id}`:null});
-      const context=await browser.newContext({viewport:{width:1280,height:960},deviceScaleFactor:1,javaScriptEnabled:false,serviceWorkers:'block'});
+      const context=await browser.newContext({viewport,deviceScaleFactor:1,javaScriptEnabled:false,serviceWorkers:'block'});
       const page=await context.newPage();
       const blocked=[];
       await context.route('**/*',route=>{

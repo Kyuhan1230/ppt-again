@@ -1,5 +1,6 @@
 import {readInput} from './input.mjs';
 import {measureInput} from './measure.mjs';
+import {inspectInput,verifySelection} from './html-regions.mjs';
 import {exportPptx} from './export.mjs';
 import {readPptx} from './read-pptx.mjs';
 import {exportHtml} from './export-html.mjs';
@@ -33,6 +34,18 @@ async function analyzeHtml(source){
   const measured=await measureInput(input,runtime);limit(runtime.limitExceeded);checkModel(measured.model);
   return {input,measured};
 }
+async function inspectHtml(source,verify=false){
+  const input=await readInput(source);
+  checkModel(input.project);
+  limit(input.fontFaces.length>32||input.assets.filter(asset=>asset.mime.startsWith('font/')).reduce((n,asset)=>n+asset.bytes.length,0)>32*1024*1024);
+  runtime=await createBrowserRuntime({checkLimits:true,onBrowserProcess:pid=>{if(process.connected)process.send({type:'browser',pid});}});
+  if(cancelled)return null;
+  const result=verify
+    ?{verification:await verifySelection(input,runtime,{viewport:source.viewport,snapshotId:source.snapshotId,choiceId:source.choiceId})}
+    :{inspection:await inspectInput(input,runtime,{viewport:source.viewport})};
+  limit(runtime.limitExceeded);
+  return result;
+}
 async function cancel(){cancelled=true;await runtime?.close().catch(()=>{});}
 process.on('disconnect',()=>{if(!finished)void cancel().finally(()=>process.exit(1));});
 process.on('message',async message=>{
@@ -43,6 +56,10 @@ process.on('message',async message=>{
     if(cancelled)return;
     if(message.operation==='analyze-html'){
       result=await analyzeHtml(message.input);
+    }else if(message.operation==='inspect-html'){
+      result=await inspectHtml(message.input);
+    }else if(message.operation==='verify-html-selection'){
+      result=await inspectHtml(message.input,true);
     }else if(message.operation==='analyze-pptx'){
       const bytes=message.input instanceof Uint8Array?message.input:message.input.bytes,options=message.input instanceof Uint8Array?{}:message.input.options;
       const parsed=await readPptx(bytes,options,{renderChartImages:renderPowerPointChartImages});checkModel(parsed.model);

@@ -759,9 +759,12 @@ export async function measureInput(input,runtime) {
     if(input.profile==='static-slides-v1')fallbackFonts=await applyFallbackFont(session.page,installedNativeAliases());
     if(input.profile==='svg-slides-v1'){await measureSvgInput(input,runtime,session,result);await attachFonts();return result;}
     let selector=input.profile==='project-data-v1'?'[data-slide]':input.source.slideSelector??'[data-slide]';
-    // Auto-detect only an unambiguous visible fixed-size container; never guess among competing containers.
+    // A fixed-size candidate is only evidence for inspection; without an
+    // explicit or declared slide it must never become a conversion decision.
     let automaticallyDetected=false;
+    let selectionRequired=false;
     if(input.profile==='static-slides-v1'&&!input.source.slideSelector){
+      selectionRequired=!await session.page.evaluate(()=>Boolean(document.querySelector('[data-slide]')));
       const detected=await session.page.evaluate(()=>{
         if(document.querySelector('[data-slide]'))return null;
         const candidates=[...document.querySelectorAll('section,article,main,div')].filter(el=>{
@@ -774,6 +777,8 @@ export async function measureInput(input,runtime) {
       });
       if(detected){selector=detected;automaticallyDetected=true;}
     }
+    if(selectionRequired)result.diagnostics.push(diagnostic('SELECTION_REQUIRED','장표 범위를 선택해야 합니다. 후보를 조사하거나 선택자를 지정해 주세요.'));
+    if(selectionRequired&&!automaticallyDetected)return result;
     const inspectOutside=selector=>{
         let roots;try{roots=[...document.querySelectorAll(selector)];}catch{return {outside:false,hidden:false};}
         if(!roots.length)return {outside:false,hidden:false};
@@ -923,6 +928,7 @@ export async function measureInput(input,runtime) {
       if(observed.incomplete&&!input.source.slideSelector)result.diagnostics.push(diagnostic('RENDER_INCOMPLETE','장표 바깥 내용의 검사를 마치지 못했습니다.'));
       if(observed.hidden||observed.incomplete||executableScript)result.diagnostics.push(diagnostic('SLIDE_CONTENT_UNOBSERVED','스크립트로 생성되거나 숨겨진 내용과 일부 CSS 합성은 확인하지 못했습니다. 원본과 선택 범위를 확인해 주세요.',{},'warning'));
     }
+    if(selectionRequired)return result;
     if(input.charts?.length){
       const frames=await session.page.evaluate(({selector,ids})=>{
         let roots;try{roots=[...document.querySelectorAll(selector)];}catch{return [];}
