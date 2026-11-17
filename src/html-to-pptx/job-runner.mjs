@@ -72,9 +72,10 @@ async function processRows(){
 async function processTree(owned,initialPid=null){
   const rows=await processRows();
   if(initialPid){const worker=rows.find(row=>row.pid===initialPid);if(!worker?.created)throw failure('OBSERVER_IDENTITY_UNAVAILABLE',500);owned.set(worker.pid,worker.created);}
+  if(rows.some(row=>owned.has(row.pid)&&!row.created))throw failure('OBSERVER_IDENTITY_UNAVAILABLE',500);
   const ids=new Set(rows.filter(row=>row.created&&owned.get(row.pid)===row.created).map(row=>row.pid));
   const byPid=new Map(rows.map(row=>[row.pid,row]));
-  let changed=true;while(changed){changed=false;for(const row of rows)if(ids.has(row.parent)&&!ids.has(row.pid)&&row.created&&BigInt(row.created)>=BigInt(byPid.get(row.parent).created)){ids.add(row.pid);changed=true;}}
+  let changed=true;while(changed){changed=false;for(const row of rows)if(ids.has(row.parent)&&!ids.has(row.pid)){if(!row.created)throw failure('OBSERVER_IDENTITY_UNAVAILABLE',500);if(BigInt(row.created)>=BigInt(byPid.get(row.parent).created)){ids.add(row.pid);changed=true;}}}
   const selected=rows.filter(row=>ids.has(row.pid)&&row.created);
   for(const row of selected)owned.set(row.pid,row.created);
   return selected;
