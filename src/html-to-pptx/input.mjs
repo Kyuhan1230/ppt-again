@@ -31,6 +31,9 @@ export async function readInput({html, assets: provided = [], slideSelector = nu
   }
   if(total>64*1024*1024) { fail('INPUT_INVALID','제공 자산의 총 크기가 64MiB를 초과합니다.'); return input; }
   if(input.diagnostics.some(d=>d.severity==='error'))return input;
+  // Keep a digest of the entire supplied asset mapping, including unreferenced
+  // entries, so a later inspection cannot reuse a stale selection silently.
+  input.source.providedAssetsHash=sha256(JSON.stringify(provided.map(a=>[assetPath(a.path),a.mime??null,sha256(a.bytes)]).sort((a,b)=>a[0].localeCompare(b[0]))));
   const tree = parse(original,{sourceCodeLocationInfo:true}),nodes=[...walkHtml(tree)];
   if(allowEmbedded&&!slideSelector&&!nodes.some(n=>attribute(n,'data-slide')!==undefined||attribute(n,'data-slidehandoff')!==undefined)){
     const embedded=readEmbeddedSlideData(tree);

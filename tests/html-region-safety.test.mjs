@@ -17,28 +17,28 @@ after(async () => { await runtime?.close(); });
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j1ioAAAAASUVORK5CYII=';
 const card = '<div id="slide" style="width:400px;height:300px;background:white"><p style="margin:0;font:20px Arial">CARD</p></div>';
 const documentWith = (before = '', after = '') => `<!doctype html><html><body style="margin:0">${before}${card}${after}</body></html>`;
-const inspect = async (html, slideSelector = null) => measureInput(await readInput({html,slideSelector}),runtime);
+const inspect = async (html, slideSelector = '#slide') => measureInput(await readInput({html,slideSelector}),runtime);
 const outside = result => result.diagnostics.filter(d => d.code === 'SLIDE_CONTENT_OUTSIDE');
 
-test('automatic selection rejects visible text before and after its only candidate',async()=>{
+test('explicit selection warns about visible text before and after its candidate',async()=>{
   const measured=await inspect(documentWith('<h1>REPORT</h1>','<p>FOOTER</p>'));
-  assert.ok(outside(measured).some(d=>d.severity==='error'),JSON.stringify(measured.diagnostics));
-  assert.equal((await exportPptx(measured)).status,'failed');
+  assert.ok(outside(measured).some(d=>d.severity==='warning'),JSON.stringify(measured.diagnostics));
+  assert.equal((await exportPptx(measured)).status,'generated');
 });
 
-test('automatic selection rejects a visible image outside its candidate',async()=>{
+test('explicit selection warns about a visible image outside its candidate',async()=>{
   const measured=await inspect(documentWith('',`<img src="${png}" width="40" height="40" alt="outside">`));
-  assert.ok(outside(measured).some(d=>d.severity==='error'),JSON.stringify(measured.diagnostics));
+  assert.ok(outside(measured).some(d=>d.severity==='warning'),JSON.stringify(measured.diagnostics));
 });
 
-test('automatic selection inspects direct text on an ancestor of the candidate',async()=>{
+test('explicit selection inspects direct text on an ancestor of the candidate',async()=>{
   const measured=await inspect(`<body style="margin:0"><main>Intro${card}Outro</main></body>`);
-  assert.ok(outside(measured).some(d=>d.severity==='error'),JSON.stringify(measured.diagnostics));
+  assert.ok(outside(measured).some(d=>d.severity==='warning'),JSON.stringify(measured.diagnostics));
 });
 
-test('automatic selection checks document content below the current viewport',async()=>{
+test('explicit selection checks document content below the current viewport',async()=>{
   const measured=await inspect(documentWith('','<p style="position:absolute;top:3000px">BELOW</p>'));
-  assert.ok(outside(measured).some(d=>d.severity==='error'),JSON.stringify(measured.diagnostics));
+  assert.ok(outside(measured).some(d=>d.severity==='warning'),JSON.stringify(measured.diagnostics));
 });
 
 test('explicit selector preserves the chosen card and warns about outside content',async()=>{
@@ -78,7 +78,7 @@ test('fully clipped outside text does not produce an outside warning',async()=>{
 
 test('declared data-slide retains its existing interpretation',async()=>{
   const html='<h1>PAGE CHROME</h1><section data-slide style="width:400px;height:300px"><p style="font:20px Arial">SLIDE</p></section>';
-  const measured=await inspect(html);
+  const measured=await inspect(html,null);
   assert.deepEqual(outside(measured),[],JSON.stringify(measured.diagnostics));
   assert.equal((await exportPptx(measured)).status,'generated',JSON.stringify(measured.diagnostics));
 });
@@ -92,7 +92,7 @@ test('existing single SVG slide retains its existing interpretation',async()=>{
   assert.equal((await exportPptx(measured)).status,'generated',JSON.stringify(measured.diagnostics));
 });
 
-test('CLI reports outside content and does not create a PPT for automatic selection',async t=>{
+test('CLI requires a selection and does not create a PPT for unmarked HTML',async t=>{
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'ppt-region-safety-'));
   const input=path.join(dir,'input.html'),output=path.join(dir,'output.pptx');
   t.after(async()=>{
@@ -105,34 +105,34 @@ test('CLI reports outside content and does not create a PPT for automatic select
   assert.equal(result.status,1,result.stdout||result.stderr);
   const report=JSON.parse(result.stdout);
   assert.equal(report.status,'failed');
-  assert.equal(report.code,'SLIDE_CONTENT_OUTSIDE');
-  assert.ok(report.diagnostics.some(d=>d.code==='SLIDE_CONTENT_OUTSIDE'&&d.severity==='error'));
+  assert.equal(report.code,'SELECTION_REQUIRED');
+  assert.ok(report.diagnostics.some(d=>d.code==='SELECTION_REQUIRED'&&d.severity==='error'),JSON.stringify(report));
   assert.doesNotMatch(result.stdout,/PRIVATE_HEADING|PRIVATE_FOOTER/);
   await assert.rejects(fs.access(output),{code:'ENOENT'});
 });
-test('automatic selection rejects a small SVG outside its candidate',async()=>{
+test('explicit selection warns about a small SVG outside its candidate',async()=>{
   const icon='<svg width="40" height="40" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="0" y="0" width="24" height="24" fill="#cc0000"/></svg>';
-  const input=await readInput({html:documentWith('',icon)});
+  const input=await readInput({html:documentWith('',icon),slideSelector:'#slide'});
   assert.equal(input.profile,'static-slides-v1');
   const measured=await measureInput(input,runtime);
-  assert.ok(outside(measured).some(d=>d.severity==='error'),JSON.stringify(measured.diagnostics));
+  assert.ok(outside(measured).some(d=>d.severity==='warning'),JSON.stringify(measured.diagnostics));
 });
 
-test('automatic selection rejects a visible colored non-text element outside its candidate',async()=>{
+test('explicit selection warns about a visible colored non-text element outside its candidate',async()=>{
   const decoration='<aside style="width:40px;height:30px;background-color:#cc0000"></aside>';
   const measured=await inspect(documentWith('',decoration));
-  assert.ok(outside(measured).some(d=>d.severity==='error'),JSON.stringify(measured.diagnostics));
+  assert.ok(outside(measured).some(d=>d.severity==='warning'),JSON.stringify(measured.diagnostics));
 });
 test('offscreen loaded image is detected while an empty transparent wrapper is ignored',async()=>{
   const empty=await inspect(documentWith('','<aside style="width:40px;height:30px;background:transparent"></aside>'));
   assert.deepEqual(outside(empty),[]);
   const image=await inspect(documentWith('',`<img src="${png}" style="position:absolute;top:3000px;width:40px;height:40px">`));
-  assert.ok(outside(image).some(d=>d.severity==='error'));
+  assert.ok(outside(image).some(d=>d.severity==='warning'));
 });
 
 test('a partially transparent colored area is detected',async()=>{
   const measured=await inspect(documentWith('','<aside style="width:40px;height:30px;background:rgba(255,0,0,.2)"></aside>'));
-  assert.ok(outside(measured).some(d=>d.severity==='error'));
+  assert.ok(outside(measured).some(d=>d.severity==='warning'));
 });
 
 test('hidden content and executable scripts report an observation limit',async()=>{
@@ -155,14 +155,14 @@ test('transparent text is ignored but visible text overriding inherited visibili
   const transparent=await inspect(documentWith('<span style="color:transparent">HIDDEN</span>'));
   assert.deepEqual(outside(transparent),[],JSON.stringify(transparent.diagnostics));
   const visible=await inspect(documentWith('<aside style="visibility:hidden"><span style="visibility:visible">VISIBLE</span></aside>'));
-  assert.ok(outside(visible).some(d=>d.severity==='error'));
+  assert.ok(outside(visible).some(d=>d.severity==='warning'));
 });
 
 test('document scrolling does not hide loaded text or images below the viewport',async()=>{
   for(const item of ['<p style="position:absolute;top:3000px">BELOW</p>',`<img src="${png}" style="position:absolute;top:3000px;width:40px;height:40px">`]){
     const html=`<style>html,body{height:100%;overflow:auto}</style><body>${card}${item}</body>`;
     const measured=await inspect(html);
-    assert.ok(outside(measured).some(d=>d.severity==='error'),JSON.stringify(measured.diagnostics));
+    assert.ok(outside(measured).some(d=>d.severity==='warning'),JSON.stringify(measured.diagnostics));
   }
 });
 
@@ -173,7 +173,7 @@ test('script MIME parameters still report the observation limit',async()=>{
 
 test('overflow on a non-replaced inline element does not hide visible text',async()=>{
   const measured=await inspect(documentWith('<span style="overflow:hidden">VISIBLE</span>'));
-  assert.ok(outside(measured).some(d=>d.severity==='error'),JSON.stringify(measured.diagnostics));
+  assert.ok(outside(measured).some(d=>d.severity==='warning'),JSON.stringify(measured.diagnostics));
 });
 
 test('an internal scroll container clips content outside its visible area',async()=>{
@@ -185,8 +185,8 @@ test('an internal scroll container clips content outside its visible area',async
 
 test('generated content outside the slide is detected for automatic and explicit selection',async()=>{
   const html=documentWith('<style>aside::before{content:"PRIVATE_GENERATED"}</style><aside></aside>');
-  const auto=await inspect(html);
-  assert.ok(outside(auto).some(d=>d.severity==='error'),JSON.stringify(auto.diagnostics));
+  const auto=await inspect(html,null);
+  assert.ok(auto.diagnostics.some(d=>d.code==='SELECTION_REQUIRED'&&d.severity==='error'),JSON.stringify(auto.diagnostics));
   const explicit=await inspect(html,'#slide');
   assert.ok(outside(explicit).some(d=>d.severity==='warning'),JSON.stringify(explicit.diagnostics));
   assert.doesNotMatch(JSON.stringify(outside(explicit)),/PRIVATE_GENERATED|#slide/);
@@ -200,11 +200,10 @@ test('hidden, transparent, clipped, and absent generated content are not visible
   }
 });
 
-test('generated-content scan budget does not report an unexamined automatic scope as complete',async()=>{
+test('generated-content scan budget reports an unexamined explicit scope',async()=>{
   const boxes='<aside></aside>'.repeat(129);
   const html=documentWith(`<style>aside{position:relative;width:1px;height:1px;overflow:hidden}aside::before{content:"x";position:absolute;left:100px}</style>${boxes}`);
   const measured=await inspect(html);
-  assert.ok(measured.diagnostics.some(d=>d.code==='RENDER_INCOMPLETE'&&d.severity==='error'));
   assert.ok(measured.diagnostics.some(d=>d.code==='SLIDE_CONTENT_UNOBSERVED'&&d.severity==='warning'));
 });
 
@@ -216,7 +215,7 @@ test('empty transparent generated boxes are not visible content',async()=>{
 
 test('painted ancestor outside the selected card is detected without treating default body background as content',async()=>{
   const painted=await inspect(`<body style="margin:0"><main style="padding:20px;background:red">${card}</main></body>`);
-  assert.ok(outside(painted).some(d=>d.severity==='error'),JSON.stringify(painted.diagnostics));
+  assert.ok(outside(painted).some(d=>d.severity==='warning'),JSON.stringify(painted.diagnostics));
   const body=await inspect(`<body style="margin:0;background:white">${card}</body>`);
   assert.deepEqual(outside(body),[],JSON.stringify(body.diagnostics));
 });
@@ -241,8 +240,8 @@ test('outside generated content is checked in both initial and conversion viewpo
   const slide='<div id="slide" style="width:400px;height:600px;background:white">CARD</div>';
   for(const media of ['@media(max-width:1000px){aside::before{content:none}}','@media(min-width:1001px){aside::before{content:none}}']){
     const html=`<style>aside::before{content:"OUTSIDE"}${media}</style><body style="margin:0">${slide}<aside></aside></body>`;
-    const automatic=await inspect(html);
-    assert.ok(outside(automatic).some(d=>d.severity==='error'),JSON.stringify(automatic.diagnostics));
+    const automatic=await inspect(html,null);
+    assert.ok(automatic.diagnostics.some(d=>d.code==='SELECTION_REQUIRED'&&d.severity==='error'),JSON.stringify(automatic.diagnostics));
     const explicit=await inspect(html,'#slide');
     assert.ok(outside(explicit).some(d=>d.severity==='warning'),JSON.stringify(explicit.diagnostics));
   }
@@ -268,7 +267,7 @@ test('clipped generated content does not mutate selector conditions or ancestor 
     };
     return session;
   }};
-  const measured=await measureInput(await readInput({html}),trackedRuntime);
+  const measured=await measureInput(await readInput({html,slideSelector:'#slide'}),trackedRuntime);
   assert.deepEqual(outside(measured),[],JSON.stringify(measured.diagnostics));
   assert.ok(measured.diagnostics.some(d=>d.code==='SLIDE_CONTENT_UNOBSERVED'));
   assert.deepEqual(observation.before,observation.after);
@@ -301,4 +300,13 @@ test('CLI explicit selection generates a PPT and warns without exposing source c
   assert.ok(report.diagnostics.some(d=>d.code==='SLIDE_CONTENT_OUTSIDE'&&d.severity==='warning'));
   assert.doesNotMatch(result.stdout,/PRIVATE_HEADING|PRIVATE_FOOTER|#slide/);
   await fs.access(output);
+});
+
+test('unmarked HTML never becomes a slide without an explicit choice even for a single fixed-size card',async()=>{
+  for(const html of [documentWith(),documentWith('<h1>REPORT</h1>'),documentWith('',`<img src="${png}" width="40" height="40">`)]){
+    const measured=await inspect(html,null);
+    assert.ok(measured.diagnostics.some(d=>d.code==='SELECTION_REQUIRED'&&d.severity==='error'),JSON.stringify(measured.diagnostics));
+    assert.equal(measured.model,null);
+    assert.equal((await exportPptx(measured)).status,'failed');
+  }
 });
