@@ -36,9 +36,17 @@
             <label for="assets">이미지·글꼴 파일</label><input id="assets" type="file" multiple>
             <label for="asset-folder">또는 폴더 선택</label><input id="asset-folder" type="file" webkitdirectory multiple>
             <p class="help">HTML이 참조하는 상대 경로를 유지하세요.</p>
-            <label for="selector">장표 선택자 <span class="optional">선택</span></label>
-            <input id="selector" placeholder="예: .slide" spellcheck="false">
-            <p class="help">변환할 영역을 직접 지정할 때 입력하세요.</p>
+            <label for="html-page-mode">HTML 변환 범위</label>
+            <select id="html-page-mode" aria-describedby="html-pagination-help">
+              <option value="slides">장표 영역 기준 (기본)</option>
+              <option value="paginate">문서 전체를 여러 장으로 나누기</option>
+            </select>
+            <p id="html-pagination-help" class="help" hidden>크기를 지정하지 않으면 16:9로 나눕니다. 객체를 안전하게 나눌 수 없으면 변환을 멈춥니다.</p>
+            <div id="html-selector-settings" class="disclosure-content">
+              <label for="selector">장표 선택자 <span class="optional">선택</span></label>
+              <input id="selector" placeholder="예: .slide" spellcheck="false">
+              <p class="help">변환할 영역을 직접 지정할 때 입력하세요.</p>
+            </div>
             <label for="slide-size-policy">PPT 장표 크기</label>
             <select id="slide-size-policy">
               <option value="auto">원본 PPT 또는 첫 장 크기 (기본)</option>
@@ -99,6 +107,8 @@
       <p id="duration-note" class="duration-note" role="status" aria-live="polite" hidden></p>
       <p id="slide-size-report" class="help" role="status" hidden></p>
       <details id="slide-size-details" class="inline-help" hidden><summary>장표별 크기와 여백 보기</summary><ul id="slide-size-list"></ul></details>
+      <p id="html-pagination-report" class="help" role="status" hidden></p>
+      <details id="html-pagination-details" class="inline-help" hidden><summary>장표별 HTML 구간 보기</summary><ol id="html-pagination-list"></ol></details>
       <button id="region-reselect-button" class="region-reselect" type="button" hidden>다른 영역 선택</button>
       <div id="empty-preview" class="empty-preview"><div class="slide-outline" aria-hidden="true">HTML <b>↔</b> PPT</div><p>파일을 분석하면 미리보기가 표시됩니다.</p></div>
       <section id="region-area" class="region-area" aria-labelledby="region-heading" hidden>

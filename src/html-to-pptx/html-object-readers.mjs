@@ -1,5 +1,5 @@
 // Runs inside a script-disabled browser. This is repository-owned measurement code.
-export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTableOverlay=false,nativeAliases=[],charts=[]}) {
+export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTableOverlay=false,nativeAliases=[],charts=[],tablesOnly=false}) {
   const editable=['editable-slides-v1','editable-slides-v2'].includes(profile),declared=editable||profile==='project-data-v1';
   const diagnostics=[];
   const issue=(code,message,slideId=null,nodeId=null,sourceRef=null)=>diagnostics.push({code,severity:'error',slideId,nodeId,sourceRef,message});
@@ -55,7 +55,7 @@ export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,a
     const nodes=[],objects=[],seen=new Set(),textOwners=new Set(),domOrder=new WeakMap(),orderKeys=new Map();let order=0,domIndex=0;
     const domWalker=document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT|NodeFilter.SHOW_TEXT);domOrder.set(root,domIndex++);
     while(domWalker.nextNode())domOrder.set(domWalker.currentNode,domIndex++);
-    const elements=declared?[...root.querySelectorAll('[data-source-id]')]:[root,...root.querySelectorAll('*')];
+    const elements=tablesOnly?[...root.children].filter(element=>element.tagName==='TABLE'):declared?[...root.querySelectorAll('[data-source-id]')]:[root,...root.querySelectorAll('*')];
     // Relation data may suggest that one PPT object produced this element;
     // it never supplies text or appearance, and is not proof of provenance.
     const originDocument=document.documentElement.getAttribute('data-pptx-origin-document');

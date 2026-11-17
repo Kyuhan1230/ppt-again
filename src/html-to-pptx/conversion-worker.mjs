@@ -1,5 +1,6 @@
 import {readInput} from './input.mjs';
 import {measureInput} from './measure.mjs';
+import {measurePaginatedInput} from './measure-pagination.mjs';
 import {inspectInput,verifySelection} from './html-regions.mjs';
 import {measureSelectedInput} from './html-selection.mjs';
 import {exportPptx} from './export.mjs';
@@ -38,7 +39,16 @@ async function analyzeHtml(source,selected=false){
   limit(input.fontFaces.length>32||input.assets.filter(asset=>asset.mime.startsWith('font/')).reduce((n,asset)=>n+asset.bytes.length,0)>32*1024*1024);
   runtime=await createBrowserRuntime({checkLimits:true,onBrowserProcess:pid=>{if(process.connected)process.send({type:'browser',pid});}});
   if(cancelled)return null;
-  const measured=selected?await measureSelectedInput(input,runtime,{viewport:source.viewport,snapshotId:source.snapshotId,choiceId:source.choiceId}):await measureInput(input,runtime,{viewport:source.viewport});limit(runtime.limitExceeded);checkModel(measured.model);
+  let measured;
+  if (selected) {
+    measured = await measureSelectedInput(input, runtime, { viewport: source.viewport, snapshotId: source.snapshotId, choiceId: source.choiceId });
+  } else if (source.pageMode === 'paginate') {
+    measured = await measurePaginatedInput(input, runtime, { viewport: source.viewport });
+  } else {
+    measured = await measureInput(input, runtime, { viewport: source.viewport });
+  }
+  limit(runtime.limitExceeded);
+  checkModel(measured.model);
   return {input,measured};
 }
 async function inspectHtml(source,verify=false){

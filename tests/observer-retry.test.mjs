@@ -24,10 +24,9 @@ before(async()=>{
       scenario.cleanupCommands.push(script);
       return {stdout:''};
     }
-    assert.equal(options.timeout,5000);
     const sample=scenario.samples.shift();
     assert.ok(sample,'Unexpected process sample');
-    return {stdout:JSON.stringify(await sample())};
+    return {stdout:JSON.stringify(await sample(options.timeout))};
   };
   childProcess.fork=()=>scenario.child;
   syncBuiltinESMExports();
@@ -103,6 +102,20 @@ test('an active observation timeout cancels the conversion and cleans up verifie
   await expectObserverFailure(pending,'active','OBSERVER_TIMEOUT');
   assert.deepEqual(events,['run','cancel']);
   assert.match(cleanupCommands[0],/242:120/);
+});
+
+test('a delayed active census still enforces the RSS limit after validating the process tree',async()=>{
+  const delayedCensus=timeoutMs=>{
+    // Model a Windows query that takes more than five seconds, without a real wait.
+    if(timeoutMs<6500)throw timeout();
+    assert.equal(timeoutMs,8000);
+    return [worker,browser];
+  };
+  const {pending,events}=run([timeoutMs=>{assert.equal(timeoutMs,5000);return initialSample();},delayedCensus,initialSample],{
+    maxRssBytes:2200,onRun:({child})=>child.emit('message',{type:'browser',pid:browser.pid})
+  });
+  await assert.rejects(pending,{code:'JOB_MEMORY_LIMIT'});
+  assert.deepEqual(events,['run','cancel']);
 });
 
 test('a timeout during clean worker exit accepts a result only after a new census confirms exit',async()=>{
