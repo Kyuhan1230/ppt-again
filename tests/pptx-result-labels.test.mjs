@@ -4,7 +4,10 @@ import fs from 'node:fs/promises';
 import vm from 'node:vm';
 const js=await fs.readFile(new URL('../web/html-to-pptx/app.js',import.meta.url),'utf8');
 const html=await fs.readFile(new URL('../web/html-to-pptx/index.html',import.meta.url),'utf8');
-const functionSource=js.slice(js.indexOf('function resultMessages(job){'),js.indexOf('function showResult(job){'));
+const start=js.indexOf('function resultMessages(job){');
+const end=js.indexOf('\n}',start);
+assert.ok(start>=0&&end>start,'resultMessages function must be present');
+const functionSource=js.slice(start,end+2);
 const messages=vm.runInNewContext(`(${functionSource.trim()})`);
 const job={sourceType:'pptx',status:'failed',slides:[],exportAvailable:false,partialExportAvailable:false,fileName:'synthetic.pptx',slideCount:0};
 test('PPTX settings omit redundant direction headings and retain accessible controls',()=>{
