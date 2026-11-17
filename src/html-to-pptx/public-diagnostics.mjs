@@ -1,6 +1,7 @@
 const messages={
   PPTX_FONT_REPLACED:'선택한 글꼴로 HTML 문구를 바꿨습니다. 글꼴 파일은 포함하지 않으며 줄바꿈과 배치가 달라질 수 있습니다.',
   PPTX_OBJECT_PLACEHOLDER:'지원하지 않는 내용을 표시 상자로 남겼습니다. 원본과 비교해 보완해 주세요.',
+  PPTX_OBJECT_SPLIT:'원래 하나였던 도형과 글자를 현재 배치대로 별도 객체로 저장합니다. 원본과 비교해 주세요.',
   SOURCE_PLACEHOLDER_PRESENT:'이 HTML에는 원본에서 변환하지 못한 객체의 표시가 있습니다. 다시 만든 PPT에는 상세 설명이 포함되지 않으므로 원본과 비교해 보완해 주세요.',
   PPTX_PREVIEW_UNAVAILABLE:'미리보기를 만들지 못했지만 읽어 낸 내용을 HTML로 내려받을 수 있습니다. 배치를 확인해 주세요.',
   PPTX_PREVIEW_LAYOUT_APPROXIMATED:'미리보기 일부 배치가 원본과 다를 수 있습니다. 원본과 비교해 주세요.',

@@ -7,7 +7,7 @@ const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const nonempty = v => typeof v === 'string' && v.trim().length > 0;
 const digest = v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
 const kinds = new Set(['text', 'shape', 'line', 'image', 'group', 'table', 'chart']);
-const codes = new Set(['PPTX_FONT_REPLACED', 'PPTX_OBJECT_PLACEHOLDER', 'SOURCE_PLACEHOLDER_PRESENT', 'PPTX_PREVIEW_UNAVAILABLE', 'PPTX_PREVIEW_LAYOUT_APPROXIMATED', 'PPTX_GROUP_SCALE_APPROXIMATED', 'PPTX_SHAPE_IMAGE_APPROXIMATED', 'INPUT_INVALID', 'SLIDE_ROOT_REQUIRED', 'SELECTION_REQUIRED', 'SLIDE_CONTENT_OUTSIDE', 'SLIDE_CONTENT_UNOBSERVED', 'ASSET_MISSING', 'FONT_UNAVAILABLE', 'FONT_SUBSTITUTED', 'FONT_PREVIEW_SUBSTITUTED',
+const codes = new Set(['PPTX_FONT_REPLACED', 'PPTX_OBJECT_PLACEHOLDER', 'PPTX_OBJECT_SPLIT', 'SOURCE_PLACEHOLDER_PRESENT', 'PPTX_PREVIEW_UNAVAILABLE', 'PPTX_PREVIEW_LAYOUT_APPROXIMATED', 'PPTX_GROUP_SCALE_APPROXIMATED', 'PPTX_SHAPE_IMAGE_APPROXIMATED', 'INPUT_INVALID', 'SLIDE_ROOT_REQUIRED', 'SELECTION_REQUIRED', 'SLIDE_CONTENT_OUTSIDE', 'SLIDE_CONTENT_UNOBSERVED', 'ASSET_MISSING', 'FONT_UNAVAILABLE', 'FONT_SUBSTITUTED', 'FONT_PREVIEW_SUBSTITUTED',
   'PPTX_IMAGE_APPEARANCE_APPROXIMATED', 'PPTX_TABLE_STYLE_APPROXIMATED', 'PPTX_SHADOW_OMITTED', 'PPTX_SHADOW_APPROXIMATED', 'PPTX_ARROWHEAD_OMITTED',
   'PPTX_MATH_IMAGE_FALLBACK', 'PPTX_IMAGE_DUOTONE_BAKED', 'PPTX_ANIMATION_OMITTED',
   'FONT_INVALID','FONT_FORMAT_UNSUPPORTED','FONT_VARIABLE_UNSUPPORTED','FONT_STYLE_UNSUPPORTED','FONT_STYLE_MISMATCH','FONT_GLYPH_MISSING',
@@ -100,6 +100,10 @@ export function validateModel(value) {
         }
         check(record(n.sourceRef) && n.sourceRef.slideId === slide.id && (nonempty(n.sourceRef.elementId) || nonempty(n.sourceRef.path)), `${np}.sourceRef`, 'Expected source location on this slide');
         check(n.parentId === null || nonempty(n.parentId), `${np}.parentId`, 'Expected parent or null');
+        if(n.pptxOrigin!==undefined){
+          const origin=n.pptxOrigin,keys=['version','documentId','slideId','objectId','parentId','role','textBox'];
+          check(record(origin)&&Object.keys(origin).every(key=>keys.includes(key))&&keys.every(key=>Object.hasOwn(origin,key))&&origin.version===1&&digest(origin.documentId)&&origin.slideId===slide.id&&origin.objectId===n.id&&origin.parentId===n.parentId&&origin.role==='text-shape'&&typeof origin.textBox==='boolean'&&n.kind==='text',`${np}.pptxOrigin`,'Invalid original object relation');
+        }
         if (n.kind === 'text') {
           check(typeof n.content?.text === 'string', `${np}.content.text`, 'Expected text');
           if(n.style?.tabSize!==undefined)check(Number.isFinite(n.style.tabSize)&&n.style.tabSize>0&&n.style.tabSize<=5000,`${np}.style.tabSize`,'Invalid tab size');

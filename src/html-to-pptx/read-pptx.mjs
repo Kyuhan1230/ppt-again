@@ -1036,6 +1036,10 @@ export async function readPptx(bytes,{fontPolicy='original',allowPartial=false}=
                   diagnostics.push({...diagnostic('PPTX_SHAPE_IMAGE_APPROXIMATED','잘린 모서리 배경은 SVG 그림으로 보존하고 글자는 별도로 편집할 수 있습니다.',{slideId:slide.id,nodeId:id},'warning'),slideNumber:index+1,...objectContexts.get(`${slide.id}:${id}`),reasonKey:'PPTX_SHAPE_IMAGE_APPROXIMATED'});
                 }
               }else if(shape&&!['rect','roundRect'].includes(shape))issue('이 텍스트 도형의 모양은 아직 지원하지 않습니다.',id);
+              else if(object.localName==='sp'){
+                const cNvSpPr=child(child(object,'nvSpPr'),'cNvSpPr');
+                node.pptxOrigin={version:1,documentId:model.sourceDigest,slideId:slide.id,objectId:id,parentId,role:'text-shape',textBox:['1','true'].includes(attr(cNvSpPr,'txBox','0'))};
+              }
             }else if(!['rect','roundRect','ellipse'].includes(shape))issue('지원 도형은 사각형·둥근 사각형·타원입니다.',id);
           }
           slide.nodes.push(node);

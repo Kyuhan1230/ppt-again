@@ -47,6 +47,11 @@ export function exportHtml(model){
     // PPT embedding permission does not grant web redistribution permission.
     for(const family of new Set((model.fonts??[]).map(f=>f.family)))diagnostics.push(diagnostic('FONT_NOT_PORTABLE',`${family}: 글꼴 파일은 HTML에 포함하지 않았습니다.`,{},'warning'));
     const size=canvasSize(model),assets=new Map(model.assets.map(a=>[a.id,a]));
+    // This is relation metadata, not a source of text or an authenticity
+    // claim. The visible DOM remains the only source of editable content.
+    const originDocuments=new Set(model.slides.flatMap(slide=>slide.nodes.map(node=>node.pptxOrigin?.documentId).filter(Boolean)));
+    const originDocument=originDocuments.size===1?[...originDocuments][0]:null;
+    if(originDocuments.size>1)diagnostics.push(diagnostic('PPTX_OBJECT_SPLIT','서로 다른 문서의 객체 관계를 함께 확인할 수 없어 현재 객체를 분리해 유지합니다.',{},'warning'));
     // PowerPoint can name a full installed face as a family (e.g. "Arial Bold").
     // Browsers may only match its typographic family unless local() names the face.
     const localFaces=new Set(),addFace=style=>{const family=style?.fontFamily;if(localFaces.size<32&&typeof family==='string'&&/^[\p{L}\p{N} ._-]{1,150} (?:Bold|ExtraBold|SemiBold|DemiBold|UltraBold|Black|Heavy)$/iu.test(family))localFaces.add(family);};
@@ -62,6 +67,7 @@ export function exportHtml(model){
         let style=`position:absolute;box-sizing:border-box;left:${number(b.x)}px;top:${number(b.y)}px;width:${number(b.w)}px;height:${number(b.h)}px;z-index:${node.zOrder};opacity:${s.opacity??1};`,body='',tag='div',extra='';
         if(node.kind==='text'){
           const p=s.padding??{};
+          if(node.pptxOrigin&&node.pptxOrigin.documentId===originDocument)extra+=` data-pptx-origin="${esc(JSON.stringify(node.pptxOrigin))}"`;
           if(node.content.placeholderDescription)extra=` data-placeholder-marker="" role="img" tabindex="0" aria-label="${esc(node.content.placeholderDescription)}" title="${esc(node.content.placeholderDescription)}"`;
           style+=fontCss({...s,textDecoration:'none'},false)+`line-height:${s.lineHeight??'normal'};white-space:${s.whiteSpace==='pre'?'pre':'pre-wrap'};overflow:visible;text-align:${s.align??'left'};padding:${p.top??0}px ${p.right??0}px ${p.bottom??0}px ${p.left??0}px;align-content:${({mid:'center',bottom:'end'})[s.valign]??'start'};`;
           if(s.tabSize!==undefined)style+=`tab-size:${number(s.tabSize)}px;`;
@@ -160,7 +166,7 @@ export function exportHtml(model){
     // In Edge, compositing each slide avoids coloured subpixel text fringes
     // that differ from PowerPoint's grayscale slide rendering. This rendering
     // hint leaves the editable text, geometry and opacity unchanged.
-    const html=`<!doctype html><html lang="ko" data-slidehandoff="${model.version}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; script-src 'none'; base-uri 'none'"><title>편집 가능한 장표</title><style>html,body{margin:0;padding:0}body{padding:16px;background:#e5e7eb}.slide-view{width:100%;margin:0 auto 24px;overflow:hidden}section[data-slide]{will-change:transform}*{font-synthesis:weight style}${localFaceCss}</style></head><body>${slides}${missingSummary}</body></html>`;
+    const html=`<!doctype html><html lang="ko" data-slidehandoff="${model.version}"${originDocument?` data-pptx-origin-document="${esc(originDocument)}"`:''}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; script-src 'none'; base-uri 'none'"><title>편집 가능한 장표</title><style>html,body{margin:0;padding:0}body{padding:16px;background:#e5e7eb}.slide-view{width:100%;margin:0 auto 24px;overflow:hidden}section[data-slide]{will-change:transform}*{font-synthesis:weight style}${localFaceCss}</style></head><body>${slides}${missingSummary}</body></html>`;
     if(Buffer.byteLength(html)>16*1024*1024)throw new Error('출력 HTML이 재입력 한도 16MiB를 초과합니다.');
     return {status:'generated',html,diagnostics};
   }catch(e){return {status:'failed',html:null,diagnostics:[diagnostic('EXPORT_FAILED',e.message)]};}

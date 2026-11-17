@@ -65,6 +65,37 @@ export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,a
     const domWalker=document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT|NodeFilter.SHOW_TEXT);domOrder.set(root,domIndex++);
     while(domWalker.nextNode())domOrder.set(domWalker.currentNode,domIndex++);
     const elements=declared?[...root.querySelectorAll('[data-source-id]')]:[root,...root.querySelectorAll('*')];
+    // Relation data may suggest that one PPT object produced this element;
+    // it never supplies text or appearance, and is not proof of provenance.
+    const originDocument=document.documentElement.getAttribute('data-pptx-origin-document');
+    const originClaims=new Map();
+    if(editable)for(const element of root.querySelectorAll('[data-pptx-origin]')){
+      try{
+        const claim=JSON.parse(element.getAttribute('data-pptx-origin'));
+        if(typeof claim?.documentId==='string'&&typeof claim.slideId==='string'&&typeof claim.objectId==='string'){
+          const key=JSON.stringify([claim.documentId,claim.slideId,claim.objectId]);originClaims.set(key,(originClaims.get(key)??0)+1);
+        }
+      }catch{}
+    }
+    const relationFor=(el,nodeId,kind)=>{
+      if(!editable||!el.hasAttribute('data-pptx-origin'))return null;
+      let relation;
+      try{
+        const raw=el.getAttribute('data-pptx-origin');
+        if(raw.length>4096)throw new Error();
+        relation=JSON.parse(raw);
+        const keys=['version','documentId','slideId','objectId','parentId','role','textBox'];
+        const valid=relation&&typeof relation==='object'&&!Array.isArray(relation)&&Object.keys(relation).length===keys.length&&keys.every(key=>Object.hasOwn(relation,key))&&
+          relation.version===1&&/^[a-f0-9]{64}$/.test(originDocument??'')&&relation.documentId===originDocument&&relation.slideId===id&&
+          relation.objectId===nodeId&&relation.parentId===(el.dataset.parentId??null)&&relation.role==='text-shape'&&typeof relation.textBox==='boolean'&&
+          kind==='text'&&el.parentElement===root&&originClaims.get(JSON.stringify([relation.documentId,relation.slideId,relation.objectId]))===1;
+        if(!valid)throw new Error();
+        return relation;
+      }catch{
+        diagnostics.push({code:'PPTX_OBJECT_SPLIT',severity:'warning',slideId:id,nodeId,sourceRef:{slideId:id,elementId:nodeId},message:'원래 하나였던 도형과 글자를 현재 배치대로 별도 객체로 저장합니다.'});
+        return null;
+      }
+    };
     if(root.hasAttribute('data-animation-omitted'))diagnostics.push({code:'PPTX_ANIMATION_OMITTED',severity:'warning',slideId:id,nodeId:null,sourceRef:null,message:'애니메이션과 화면 전환은 정적 HTML에서 재현되지 않습니다.'});
     if(editable&&[...root.children].some(e=>!e.hasAttribute('data-source-id')))issue('UNSUPPORTED_OBJECT','객체 표식이 없는 장표 콘텐츠가 있습니다.',id);
     const hiddenByOpacity=el=>{for(let p=el;p;p=p.parentElement)if(Number(getComputedStyle(p).opacity)===0)return true;return false;};
@@ -388,7 +419,7 @@ export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,a
       }
       return true;
     }
-    async function readTextObject({el,st,nodeId,sourceRef,style,nativeList,nativeParagraphGroup,children,paragraphLines,warnBulletLayout,at,box,text}){
+    async function readTextObject({el,st,nodeId,sourceRef,style,nativeList,nativeParagraphGroup,children,paragraphLines,warnBulletLayout,at,box,text,relation}){
       const kind='text';
       let runs,backgroundBox;
       let listParagraphs;
@@ -417,7 +448,7 @@ export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,a
         }else runs=paragraphLines?children.flatMap((child,i)=>{const parts=textRuns(child);return i&&parts.length?[{text:'\n',style:parts[0].style},...parts]:parts;}):textRuns(el);
         for(const family of new Set([style.fontFamily,...runs.map(r=>r.style.fontFamily)]))if(!await fontAvailable(family))at('FONT_UNAVAILABLE',`글꼴을 사용할 수 없습니다: ${family}`);
         if(runs.map(r=>r.text).join('')!==text)at('UNSUPPORTED_OBJECT','화면 문구와 텍스트 조각의 공백·줄바꿈을 일치시킬 수 없습니다.');
-        if(el!==root&&(style.backgroundImage!=='none'||visibleColor(style.fill)||style.strokeWidth>0)) {
+        if(!relation&&el!==root&&(style.backgroundImage!=='none'||visibleColor(style.fill)||style.strokeWidth>0)) {
           orderKeys.set(`${nodeId}::background`,domOrder.get(el));
           nodes.push({id:`${nodeId}::background`,kind:'shape',boxCssPx:backgroundBox??box,zOrder:order++,content:{},style:{...style},sourceRef,parentId:editable?(el.dataset.parentId??null):null});
         }
@@ -603,7 +634,12 @@ export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,a
       const imageMatrix=svgImage?.getCTM();
       const svgBlend=st.mixBlendMode==='lighten'&&svgImage&&imageMatrix&&(Math.abs(imageMatrix.b)>1e-6||Math.abs(imageMatrix.c)>1e-6)&&!visibleColor(st.backgroundColor)&&st.backgroundImage==='none'&&!['Top','Right','Bottom','Left'].some(side=>parseFloat(st[`border${side}Width`])>0)&&![...el.childNodes].some(node=>node.nodeType===Node.TEXT_NODE&&node.data.trim());
       if(st.mixBlendMode!=='normal'&&!svgBlend||st.maskImage!=='none'||st.backdropFilter!=='none'||st.backgroundBlendMode.split(',').some(value=>value.trim()!=='normal'))at('UNSUPPORTED_OBJECT','CSS 마스크 또는 합성 효과는 아직 보존할 수 없습니다.');
-      if(Number(st.opacity)<1&&el.children.length)at('UNSUPPORTED_OBJECT','여러 자식을 합성하는 컨테이너의 투명도는 지원하지 않습니다.');
+      // CSS opacity applies to the composed element. Applying it separately
+      // to a PPT fill and direct text changes pixels where they overlap.
+      const paintedDirectText=[...el.childNodes].some(child=>child.nodeType===Node.TEXT_NODE&&child.data.trim())&&
+        (visibleColor(st.backgroundColor)||st.backgroundImage!=='none'||st.outlineStyle!=='none'&&parseFloat(st.outlineWidth)>0&&visibleColor(st.outlineColor)||
+         ['Top','Right','Bottom','Left'].some(side=>parseFloat(st[`border${side}Width`])>0&&st[`border${side}Style`]!=='none'&&visibleColor(st[`border${side}Color`])));
+      if(Number(st.opacity)<1&&(el.children.length||paintedDirectText))at('UNSUPPORTED_OBJECT','글자와 배경을 함께 합성하는 투명도는 지원하지 않습니다.');
       if(st.backgroundClip==='text')at('UNSUPPORTED_OBJECT','글자 윤곽으로 자르는 배경은 지원하지 않습니다.');
       for(const pseudo of ['::before','::after']){
         const ps=getComputedStyle(el,pseudo);if(['none','normal','""'].includes(ps.content))continue;
@@ -743,23 +779,54 @@ export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,a
       if(kind==='text'&&el.querySelector('svg'))at('UNSUPPORTED_OBJECT','HTML 글자와 SVG가 같은 줄에 섞인 콘텐츠는 별도 요소로 나누어 주세요.');
       if(seen.has(nodeId)){at('INPUT_INVALID','중복 객체 ID입니다.');continue;}seen.add(nodeId);
       const style=kind==='chart'?{fontFamily:familyName(st.fontFamily),fontSize:parseFloat(st.fontSize),fontWeight:400,fontStyle:'normal',color:'#223845',opacity:1}:plainStyle(st);
-      if(kind==='text'&&el.hasAttribute('data-pptx-shape-outline')){
-        const width=el.style.outlineWidth;
-        if(!/^\d+(?:\.\d+)?px$/.test(width)||st.outlineStyle!=='solid'||!Number.isFinite(parseFloat(width))||parseFloat(width)<=0||parseFloat(width)>1024)at('INPUT_INVALID','텍스트 도형의 외곽선이 잘못되었습니다.');
-        else Object.assign(style,{stroke:st.outlineColor,strokeWidth:parseFloat(width),borderStyle:'solid'});
+      if(kind==='text'&&el.hasAttribute('data-pptx-shape-outline')&&st.outlineStyle!=='none'&&parseFloat(st.outlineWidth)>0){
+        const authored=parseFloat(el.style.outlineWidth),computed=parseFloat(st.outlineWidth);
+        // Chromium quantizes computed outlines to device pixels. Preserve the
+        // authored PPT fraction only when it agrees with the visible width;
+        // a stylesheet override must use the current computed appearance.
+        const expected=Number.isFinite(authored)&&authored>0?Math.max(1,Math.floor(authored*devicePixelRatio))/devicePixelRatio:NaN;
+        const width=Number.isFinite(expected)&&Math.abs(computed-expected)<.05?authored:computed;
+        if(st.outlineStyle!=='solid'||!Number.isFinite(width)||width<=0||width>1024)at('INPUT_INVALID','텍스트 도형의 외곽선이 잘못되었습니다.');
+        else Object.assign(style,{stroke:st.outlineColor,strokeWidth:width,borderStyle:'solid'});
       }
       if(!readVisualStyle({el,st,kind,style,box,at}))continue;
+      let relation=relationFor(el,nodeId,kind);
+      if(editable&&kind==='text'&&el.hasAttribute('data-pptx-origin')){
+        const corners=['TopLeft','TopRight','BottomRight','BottomLeft'].map(side=>st[`border${side}Radius`]);
+        const uniform=corners.every(value=>value===corners[0]&&!value.includes('%')&&value.trim().split(/\s+/).length===1);
+        const sides=['Top','Right','Bottom','Left'].map(side=>({width:parseFloat(st[`border${side}Width`])||0,style:st[`border${side}Style`],color:st[`border${side}Color`]}));
+        const shown=sides.map(side=>side.width>0&&side.style!=='none'&&side.style!=='hidden'&&visibleColor(side.color));
+        const outline=st.outlineStyle!=='none'&&(parseFloat(st.outlineWidth)||0)>0&&visibleColor(st.outlineColor);
+        // CSS borders consume text-box space and paint inside the boundary;
+        // PPT shape strokes are centered. Do not silently move text or paint.
+        if(shown.some(Boolean))at('UNSUPPORTED_OBJECT','텍스트 도형의 CSS 테두리는 아직 원래 위치대로 보존할 수 없습니다.');
+        if(outline&&shown.some(Boolean))at('UNSUPPORTED_OBJECT','텍스트 도형의 테두리와 외곽선을 함께 보존할 수 없습니다.');
+        // Chromium rounds computed outline widths to device pixels, while
+        // the authored PPT-derived CSS retains the original fractional width.
+        const declaredOffset=parseFloat(el.style.outlineOffset),computedOffset=parseFloat(st.outlineOffset)||0;
+        const expectedOffset=Number.isFinite(declaredOffset)?declaredOffset===0?0:Math.sign(declaredOffset)*Math.max(1,Math.floor(Math.abs(declaredOffset)*devicePixelRatio))/devicePixelRatio:NaN;
+        const currentOffset=Number.isFinite(expectedOffset)&&Math.abs(expectedOffset-computedOffset)<.05?declaredOffset:computedOffset;
+        if(outline&&Math.abs(currentOffset+(style.strokeWidth||0)/2)>.05)at('UNSUPPORTED_OBJECT','텍스트 도형의 현재 외곽선 위치는 아직 보존할 수 없습니다.');
+        if(visibleColor(st.backgroundColor)&&st.backgroundClip.split(',').some(value=>{const clip=value.trim();return clip==='content-box'&&['Top','Right','Bottom','Left'].some(side=>(parseFloat(st[`padding${side}`])||0)>0)||['content-box','padding-box'].includes(clip)&&sides.some(side=>side.width>0);})){
+          at('UNSUPPORTED_OBJECT','텍스트 도형의 안쪽에만 칠하는 배경은 아직 보존할 수 없습니다.');
+        }
+        if(!uniform)at('UNSUPPORTED_OBJECT','텍스트 도형의 서로 다른 모서리는 아직 보존할 수 없습니다.');
+        if(relation&&(style.backgroundImage!=='none'||!uniform)){
+          diagnostics.push({code:'PPTX_OBJECT_SPLIT',severity:'warning',slideId:id,nodeId,sourceRef,message:'원래 하나였던 도형과 글자를 현재 배치대로 별도 객체로 저장합니다.'});
+          relation=null;
+        }
+      }
       const stacking=[];for(let parent=el;parent&&parent!==root;parent=parent.parentElement){const ps=getComputedStyle(parent),container=parent.parentElement&&getComputedStyle(parent.parentElement);if(ps.zIndex!=='auto'&&(ps.position!=='static'||/^(inline-)?(grid|flex)$/.test(container?.display)))stacking.push(Number(ps.zIndex));if(ps.order!=='0')at('UNSUPPORTED_OBJECT','CSS order를 지정한 항목은 원본 DOM 순서로 정리해 주세요.');}
       if(stacking.length>1)at('UNSUPPORTED_OBJECT','중첩된 CSS 겹침 문맥은 지원하지 않습니다.');
       style.cssZIndex=stacking.at(-1)??0;
       let content=kind==='image'?{assetId:el.dataset.assetId??null}:{};
-      if(kind==='text'){const value=await readTextObject({el,st,nodeId,sourceRef,style,nativeList,nativeParagraphGroup,children,paragraphLines,warnBulletLayout,at,box,text});box=value.box;content=value.content;}
+      if(kind==='text'){const value=await readTextObject({el,st,nodeId,sourceRef,style,nativeList,nativeParagraphGroup,children,paragraphLines,warnBulletLayout,at,box,text,relation});box=value.box;content=value.content;}
       if(kind==='image')content=readImageObject({el,st,at,content,nodeId,style,box,sourceRef});
       if(kind==='chart'){content=await readChartObject({el,st,at,style,chart});if(content===null)continue;}
       if(kind==='table'){content=await readTableObject({el,box,nodeId,style,sourceRef,at,warnBulletLayout});if(content===null)continue;}
       if(isSvg)content.inlineSvg=new XMLSerializer().serializeToString(el);
       orderKeys.set(nodeId,domOrder.get(el));
-      nodes.push({id:nodeId,kind,boxCssPx:box,zOrder:order++,content,style,sourceRef,parentId:editable?(el.dataset.parentId??null):null});
+      nodes.push({id:nodeId,kind,boxCssPx:box,zOrder:order++,content,style,sourceRef,parentId:editable?(el.dataset.parentId??null):null,...(relation?{pptxOrigin:relation}:{})});
       objects.push({nodeId,kind,boxCssPx:box,...(kind==='text'?lineMetrics(el):{})});
       addDirect();
     }
