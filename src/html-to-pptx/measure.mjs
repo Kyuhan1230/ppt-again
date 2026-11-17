@@ -11,6 +11,7 @@ import {officeCompatiblePresetGradient,presetVectorMarkup} from './preset-vector
 import {safeError} from './error-log.mjs';
 import {parse} from 'parse5';
 import {attribute,walkHtml} from './input.mjs';
+import {scanHtmlRegions} from './html-region-scan.mjs';
 
 export function scopeEmbeddedModelErrors(errors,slides){
   return errors.map(error=>{const match=/^slides\[(\d+)\]\./.exec(error.path),slide=match?slides[Number(match[1])]:null;return diagnostic('INPUT_INVALID',`${error.path}: ${error.message}`,slide?{slideId:slide.id}:{});});
@@ -694,11 +695,11 @@ async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTab
     slides.push({id,widthCssPx:width,heightCssPx:height,background:{color:rootStyle.backgroundColor,image:rootStyle.backgroundImage},nodes,...(editable&&root.dataset.pptxTransition?{transition:JSON.parse(root.dataset.pptxTransition)}:{})});
     measurements.push({slideId:id,referenceSize,renderScale,sourceTransformScale,layoutStable,objects,assetsReady:diagnostics.every(d=>d.code!=='RENDER_INCOMPLETE'),fontsReady:diagnostics.every(d=>d.code!=='FONT_UNAVAILABLE')});
   }
-  const layoutSnapshot=[...document.querySelectorAll(`${selector},${selector} *`)].map(e=>{const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height];});
+  const layoutSnapshot=[...new Set([...document.querySelectorAll(selector)].flatMap(root=>[root,...root.querySelectorAll('*')]))].map(e=>{const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height];});
   return {slides,measurements,diagnostics,layoutSnapshot,fonts:[...fontAvailability].map(([family,available])=>({family,available,custom:customFonts.has(family)}))};
 }
 
-export async function measureInput(input,runtime) {
+export async function measureInput(input,runtime,options={}) {
   const result={model:null,measurements:[],environment:{...runtime.environment},diagnostics:[...input.diagnostics],previews:[]};
   let fallbackFonts=[];
   const attachFonts=async()=>{
@@ -755,8 +756,8 @@ export async function measureInput(input,runtime) {
   }
   let session;
   try {
-    session=await runtime.render(input);
-    if(input.profile==='static-slides-v1')fallbackFonts=await applyFallbackFont(session.page,installedNativeAliases());
+    session=options.session??await runtime.render(input,{viewport:options.viewport});
+    if(input.profile==='static-slides-v1')fallbackFonts=options.fallbackFonts??await applyFallbackFont(session.page,installedNativeAliases());
     if(input.profile==='svg-slides-v1'){await measureSvgInput(input,runtime,session,result);await attachFonts();return result;}
     let selector=input.profile==='project-data-v1'?'[data-slide]':input.source.slideSelector??'[data-slide]';
     // A fixed-size candidate is only evidence for inspection; without an
@@ -907,17 +908,20 @@ export async function measureInput(input,runtime) {
     };
     const inspectScope=input.profile==='static-slides-v1'&&(automaticallyDetected||input.source.slideSelector);
     const initialObserved=inspectScope?await session.page.evaluate(inspectOutside,selector):null;
+    const inspectExplicitSafety=async()=>{try{return await session.page.evaluate(scanHtmlRegions,{selector,onlyExplicit:true});}catch(error){if(/INPUT_LIMIT/.test(error.message))throw Object.assign(new Error('INPUT_LIMIT'),{code:'INPUT_LIMIT'});throw error;}};
+    const initialScopeSafety=input.profile==='static-slides-v1'&&input.source.slideSelector?await inspectExplicitSafety():null;
     const dimensions=selector=>{try{return [...document.querySelectorAll(selector)].map(r=>{const st=getComputedStyle(r);return [parseFloat(st.width),parseFloat(st.height)];});}catch{return [];}};
     const initialDimensions=await session.page.evaluate(dimensions,selector);
     await session.page.setViewportSize({width:1151,height:877});
     const alternateDimensions=await session.page.evaluate(dimensions,selector);
-    await session.page.setViewportSize({width:1280,height:960});
+    await session.page.setViewportSize(options.viewport??{width:1280,height:960});
     if(initialDimensions.some((size,i)=>size.some((value,j)=>Math.abs(value-(alternateDimensions[i]?.[j]??NaN))>.01))){
       result.diagnostics.push(diagnostic('SLIDE_ROOT_REQUIRED','화면 크기에 따라 장표 크기가 달라집니다. 고정 너비와 높이를 지정해 주세요.'));return result;
     }
     const size=await session.page.evaluate(selector=>{try{const r=document.querySelector(selector);if(!r)return null;const st=getComputedStyle(r),w=parseFloat(st.width),h=parseFloat(st.height);return w>0&&h>0?{width:Math.round(w*1280/Math.max(w,h)),height:Math.round(h*1280/Math.max(w,h))}:null;}catch{return null;}},selector);
     if(size&&size.width>0&&size.height>0)await session.page.setViewportSize(size);
     result.environment.viewport=session.page.viewportSize();
+    if(options.validateSelection)await options.validateSelection(session.page,selector);
     // Inspect before slide scaling changes the layout; the viewport does not
     // bound the scan, but ancestor overflow does bound visible content.
     if(inspectScope){
@@ -929,6 +933,15 @@ export async function measureInput(input,runtime) {
       if(observed.hidden||observed.incomplete||executableScript)result.diagnostics.push(diagnostic('SLIDE_CONTENT_UNOBSERVED','스크립트로 생성되거나 숨겨진 내용과 일부 CSS 합성은 확인하지 못했습니다. 원본과 선택 범위를 확인해 주세요.',{},'warning'));
     }
     if(selectionRequired)return result;
+    if(input.profile==='static-slides-v1'&&input.source.slideSelector){
+      const finalScopeSafety=await inspectExplicitSafety();
+      const scopeRegions=[...initialScopeSafety.regions,...finalScopeSafety.regions];
+      if(scopeRegions.some(region=>region.rootSizeMismatch||region.rootAppearance||region.ancestorAppearance||region.externalOverlap)){
+        result.diagnostics.push(diagnostic('UNSUPPORTED_OBJECT','선택 영역의 배경·테두리나 겹친 요소를 보존할 수 없습니다. 범위와 효과를 확인해 주세요.'));
+        return result;
+      }
+      if(scopeRegions.some(region=>region.externalComplex)&&!result.diagnostics.some(d=>d.code==='SLIDE_CONTENT_UNOBSERVED'))result.diagnostics.push(diagnostic('SLIDE_CONTENT_UNOBSERVED','선택 영역 밖의 일부 CSS 합성이 화면에 미치는 영향을 확인하지 못했습니다.',{},'warning'));
+    }
     if(input.charts?.length){
       const frames=await session.page.evaluate(({selector,ids})=>{
         let roots;try{roots=[...document.querySelectorAll(selector)];}catch{return [];}
@@ -962,7 +975,7 @@ export async function measureInput(input,runtime) {
     ]).finally(()=>clearTimeout(timer));
     if(measured.layoutSnapshot){
       await new Promise(resolve=>setTimeout(resolve,60));
-      const after=await session.page.evaluate(selector=>[...document.querySelectorAll(`${selector},${selector} *`)].map(e=>{const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height];}),selector);
+      const after=await session.page.evaluate(selector=>[...new Set([...document.querySelectorAll(selector)].flatMap(root=>[root,...root.querySelectorAll('*')]))].map(e=>{const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height];}),selector);
       if(JSON.stringify(after)!==JSON.stringify(measured.layoutSnapshot)){measured.diagnostics.push(diagnostic('RENDER_INCOMPLETE','시간 간격을 둔 검사에서 배치가 바뀌었습니다.'));for(const m of measured.measurements)m.layoutStable=false;}
     }
     const slots=measured.slides.flatMap(slide=>slide.nodes.filter(n=>n.kind==='image'&&n.content.inlineSvg&&n.sourceRef.path).map(n=>({slideId:slide.id,path:n.sourceRef.path,renderScale:measured.measurements.find(m=>m.slideId===slide.id)?.renderScale})));
@@ -1049,6 +1062,7 @@ export async function measureInput(input,runtime) {
     }
     return result;
   } catch(e) {
+    if(e.code==='STALE_INSPECTION'||e.code==='REGION_UNSUPPORTED'||e.code==='INPUT_LIMIT')throw e;
     result.diagnostics.push({...diagnostic('RENDER_INCOMPLETE',`브라우저 측정이 완료되지 않았습니다: ${e.message}`),error:safeError(e)});return result;
   } finally {await session?.context.close();}
 }
