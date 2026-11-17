@@ -8,6 +8,7 @@ const messages={
   PPTX_GROUP_SCALE_APPROXIMATED:'배율이 적용된 그룹의 위치와 크기는 옮겼지만 글자 크기와 선 굵기, 셀 여백은 원본과 다를 수 있습니다.',
   PPTX_SHAPE_IMAGE_APPROXIMATED:'HTML에서는 SVG 도형을 편집할 수 있지만, 다시 만든 PPT에서는 그림으로 저장되어 개별 편집할 수 없습니다.',
   PPTX_IMAGE_APPEARANCE_APPROXIMATED:'사진은 보존하지만 색상·자유형 마스크·그림자 등 일부 효과가 생략되어 원본과 다를 수 있습니다.',
+  BACKGROUND_JPEG_UNVERIFIED:'JPEG 배경의 구조는 확인했지만 그림 전체를 읽을 수 있는지는 확인하지 못했습니다. 출력 화면을 확인해 주세요.',
   PPTX_IMAGE_DUOTONE_BAKED:'듀오톤 색상 효과를 그림에 적용했습니다. 효과를 별도 설정으로 편집할 수 없습니다.',
   PPTX_ANIMATION_OMITTED:'애니메이션과 화면 전환은 정적 HTML에서 재현되지 않습니다.',
   PPTX_MATH_IMAGE_FALLBACK:'수식을 그림으로 보존했으며 수식 자체는 편집할 수 없습니다. 배치가 원본과 다를 수 있습니다.',
