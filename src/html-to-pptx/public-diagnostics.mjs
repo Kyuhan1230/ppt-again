@@ -22,6 +22,8 @@ const messages={
   CHART_DATA_MISMATCH:'차트 표시와 원자료가 일치하지 않습니다. 원자료와 차트 표시를 일치시킨 뒤 다시 저장해 주세요.',
   LIMIT_EXCEEDED:'문서의 글자나 차트 데이터가 지원 한도를 초과합니다. 내용을 나누어 변환해 주세요.',
   SLIDE_ROOT_REQUIRED:'장표 영역을 찾지 못했습니다. 크기가 정해진 장표 HTML을 사용하거나 장표 선택자를 지정해 주세요.',
+  SLIDE_CONTENT_OUTSIDE:'장표 영역 밖에 표시된 내용이 있습니다. 범위를 확인해 주세요. 스크립트로 생성되거나 숨겨진 내용은 확인하지 못합니다.',
+  SLIDE_CONTENT_UNOBSERVED:'스크립트로 생성되거나 숨겨진 내용과 일부 CSS 합성은 확인하지 못했습니다. 원본과 선택 범위를 확인해 주세요.',
   ASSET_MISSING:'필요한 이미지나 글꼴 파일을 찾지 못했습니다. HTML에서 사용하는 자산을 함께 선택해 주세요.',
   FONT_UNAVAILABLE:'사용할 수 없는 글꼴 또는 굵기가 있습니다. 해당 글꼴을 설치하거나 지원되는 글꼴로 바꿔 주세요.',
   FONT_SUBSTITUTED:'원래 글꼴을 사용할 수 없어 Pretendard로 바꿨습니다. 줄바꿈과 배치를 확인해 주세요.',
@@ -53,6 +55,7 @@ const messages={
   EXPORT_FAILED:'변환 파일을 만들지 못했습니다. 입력 파일을 확인한 뒤 다시 시도해 주세요.'
 };
 const warnings={
+  SLIDE_CONTENT_OUTSIDE:'선택한 장표 영역 밖에 표시된 내용이 있습니다. 스크립트로 생성되거나 숨겨진 내용은 확인하지 못합니다.',
   FONT_UNAVAILABLE:'일부 글꼴 굵기를 설치된 굵기에 맞춰 출력합니다. PowerPoint에서 글자와 줄바꿈을 확인해 주세요.',
   FONT_FORMAT_UNSUPPORTED:'이 글꼴은 PPT 파일에 포함되지 않습니다. 이 경고만으로 변환이 막히지는 않지만 다른 컴퓨터에서는 글꼴이나 줄바꿈이 달라질 수 있습니다.',
   UNSUPPORTED_OBJECT:'일부 효과는 그림으로 출력되어 내부 요소를 개별 수정할 수 없습니다. 다운로드한 PPT를 확인해 주세요.',
