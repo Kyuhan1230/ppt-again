@@ -16,8 +16,9 @@ test('candidate preview and choice are bound to their owner and actual selection
   const payload={snapshotId:job.inspection.snapshotId,choiceId:choice.id};
   assert.equal((await post(`/api/jobs/${job.id}/select`,payload,otherCookie,otherCsrf)).status,404);
   assert.equal((await post(`/api/jobs/${job.id}/select`,{...payload,bounds:{x:0}})).status,400);
+  assert.equal((await post(`/api/jobs/${job.id}/select`,{...payload,pageMode:'paginate'})).status,400);
   assert.equal((await post(`/api/jobs/${job.id}/select`,{...payload,choiceId:'c-forged'})).status,409);
-  const selected=await post(`/api/jobs/${job.id}/select`,payload),summary=await selected.json();assert.equal(selected.status,200,JSON.stringify(summary));assert.equal(summary.slideCount,1);assert.equal(summary.exportAvailable,true);
+  const selected=await post(`/api/jobs/${job.id}/select`,payload),summary=await selected.json();assert.equal(selected.status,200,JSON.stringify(summary));assert.equal(summary.slideCount,1);assert.equal(summary.exportAvailable,true);assert.equal(summary.pagination,undefined);
   const exported=await post('/api/export',{jobId:job.id}),out=await exported.json();assert.equal(exported.status,200,JSON.stringify(out));assert.ok(out.downloadUrl);
   assert.equal((await fetch(app.url+out.downloadUrl,{headers:{cookie}})).status,200);
   const again=post(`/api/jobs/${job.id}/select`,payload);

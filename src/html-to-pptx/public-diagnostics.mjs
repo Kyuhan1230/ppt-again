@@ -54,6 +54,8 @@ const messages={
   SCRIPT_REQUIRED:'스크립트 실행이 필요한 HTML입니다. 장표 내용이 포함된 정적 HTML로 저장해 주세요.',
   UNSUPPORTED_OBJECT:'지원하지 않는 표현이 있습니다. 해당 장표의 복잡한 효과를 제거하거나 기본 글자와 도형으로 바꿔 주세요.',
   SVG_TEXT_NOT_EDITABLE:'장표 안의 SVG 글자를 편집 가능한 글자로 읽는 기능은 아직 지원하지 않습니다. 해당 글자를 HTML 글자로 바꾼 정적 장표를 사용해 주세요.',
+  PAGINATION_UNSUPPORTED:'문서의 일부를 안전하게 나눌 수 없습니다. 이 문서는 장표 영역을 직접 지정하거나 원본에 장표 경계를 표시해 변환할 수 있습니다.',
+  PAGINATION_INVALID:'분할한 문서 범위를 확인할 수 없습니다. 문서를 다시 분석해 주세요.',
   RENDER_INCOMPLETE:'장표를 끝까지 읽지 못했습니다. 파일과 자산을 확인한 뒤 다시 시도해 주세요.',
   EXPORT_FAILED:'변환 파일을 만들지 못했습니다. 입력 파일을 확인한 뒤 다시 시도해 주세요.'
 };
@@ -76,6 +78,9 @@ const knownObjectErrors=new Map([
 // Fixed reasons plus narrowly bounded labels cross the UI boundary. Never
 // forward exception text, selectors, source paths, or an arbitrary message.
 const reasons={
+  PAGINATION_TIMEOUT:'시간 안에 문서 전체의 배치를 확인할 수 없습니다. 문서를 작은 구간으로 나눠 다시 분석해 주세요.',
+  PAGINATION_LAYOUT_UNSUPPORTED:'숨긴 내용, 스크롤 영역, 겹침 또는 표현을 재현하기 어려운 서식이 있어 분할할 수 없습니다. 원본의 해당 배치를 정리한 뒤 다시 분석해 주세요.',
+  PAGINATION_OVERSIZE:'한 장에 들어가지 않는 객체나 겹친 요소 묶음이 있습니다. PPT 크기를 늘리거나 원본에서 해당 내용을 나눠 주세요.',
   SIZE_ORIGINAL_ASPECT_MISMATCH:'원본 PPT 크기 정보와 모든 장표의 비율이 다릅니다. 원본 PPT에서 HTML을 다시 만들거나 출력 크기를 직접 지정해 주세요.',
   SIZE_ORIGINAL_ASPECT_OVERRIDE:'원본 PPT 크기 정보와 모든 장표의 비율이 다릅니다. 사용자가 지정한 출력 크기에 맞추었습니다.',
   SIZE_TARGET_OUT_OF_RANGE:'PPT 장표 크기는 각 변이 1~56인치여야 합니다. 다른 출력 크기를 선택해 주세요.',
@@ -363,6 +368,7 @@ export function publicDiagnostic(item,slides=[]){
   if(item.blocking===true&&severity==='error'){result.blocking=true;result.message='변환 중단: '+result.message;}
   if(Object.hasOwn(reasons,item.reasonKey)){
     result.reasonKey=item.reasonKey;result.reason=reasons[item.reasonKey];
+    if(code==='PAGINATION_UNSUPPORTED'&&['PAGINATION_TIMEOUT','PAGINATION_LAYOUT_UNSUPPORTED','PAGINATION_OVERSIZE'].includes(item.reasonKey))result.message=result.reason;
     if((item.reasonKey==='SIZE_ORIGINAL_ASPECT_OVERRIDE'&&item.code==='UNSUPPORTED_OBJECT'&&severity==='warning')||(['SIZE_ORIGINAL_ASPECT_MISMATCH','SIZE_TARGET_OUT_OF_RANGE'].includes(item.reasonKey)&&item.code==='INPUT_INVALID'&&severity==='error'))result.message=reasons[item.reasonKey];
     if(['HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED','HTML_PPTX_BULLET_LAYOUT_APPROXIMATED','HTML_PPTX_SHADOW_OMITTED','PPTX_PARAGRAPH_INDENT_APPROXIMATED','PPTX_PARAGRAPH_SPACING_APPROXIMATED','PPTX_LINE_SPACING_APPROXIMATED','PPTX_TEXT_BASELINE_APPROXIMATED','PPTX_PARAGRAPH_ALIGNMENT_APPROXIMATED','PPTX_INHERITED_SIZE_APPROXIMATED','PPTX_AUTONUM_APPROXIMATED','PPTX_TEXT_TAB_APPROXIMATED','PPTX_TEXT_HIGHLIGHT_APPROXIMATED','PPTX_TABLE_TEXT_COLOR_APPROXIMATED','PPTX_EMBEDDED_FONT_LOCAL_ONLY'].includes(item.reasonKey)&&severity==='warning')result.message=reasons[item.reasonKey];
     if(item.blocking===true&&severity==='error'){result.blocking=true;result.message='변환 중단: '+reasons[item.reasonKey];}

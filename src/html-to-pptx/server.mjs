@@ -10,6 +10,7 @@ import {diagnostic} from './model.mjs';
 import {publicDiagnostic} from './public-diagnostics.mjs';
 import {writeErrorLog} from './error-log.mjs';
 import {validSizePolicy} from './size-policy-input.mjs';
+import {publicPaginationReport} from './pagination-report.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const json=(res,status,data)=>{if(res.destroyed)return;res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});res.end(JSON.stringify(data));};
 const pptxMime='application/vnd.openxmlformats-officedocument.presentationml.presentation';
@@ -17,7 +18,7 @@ const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=u
 const downloadName=job=>(job.fileName.replace(/[\\/]/g,'_').replace(/[\x00-\x1f\x7f<>:"|?*]/g,'_').replace(/\.(?:html?|pptx)$/i,'').slice(0,120).toWellFormed()||'slides')+(job.partialExport?'-partial':'')+'.'+(job.targetType??'pptx');
 function partialSlides(job){
   const measured=job.measured,slides=measured?.model?.slides??[],errors=(measured?.diagnostics??[]).filter(d=>d.severity==='error'),ids=new Set(slides.map(s=>s.id));
-  if(job.sourceType!=='html'||job.targetType!=='pptx'||!errors.length||errors.some(d=>!d.slideId||!ids.has(d.slideId)))return null;
+  if(job.pageMode==='paginate'||job.sourceType!=='html'||job.targetType!=='pptx'||!errors.length||errors.some(d=>!d.slideId||!ids.has(d.slideId)))return null;
   const blocked=new Set(errors.map(d=>d.slideId)),included=slides.filter(s=>!blocked.has(s.id));
   if(!included.length||included.length===slides.length)return null;
   return {included,excludedSlideNumbers:slides.flatMap((s,i)=>blocked.has(s.id)?[i+1]:[])};
@@ -38,16 +39,23 @@ export function summarizeJob(job,{developmentReports=false}={}) {
   const sourceType=job.sourceType??'html',targetType=job.targetType??'pptx';
   if(job.inspection&&!job.measured)return {id:job.id,fileName:job.fileName,sourceType,targetType,status:job.selecting?'analyzing':'selection-required',inspection:job.inspection,previewUrl:job.inspectionPreview?`/api/jobs/${job.id}/inspection.png`:null,exportAvailable:false,diagnostics:[],slides:[]};
   if(!job.measured)return {id:job.id,sourceType,targetType,status:'analyzing',exportAvailable:false,diagnostics:[],slides:[]};
-  const measured=job.measured,failed=measured.diagnostics.some(d=>d.severity==='error');
-  const diagnostics=job.exportResult?.diagnostics??measured.diagnostics,partial=partialSlides(job);
+  const measured=job.measured,slideCount=measured.model?.slides.length??0;
+  const pagination=job.pageMode==='paginate'?publicPaginationReport(measured.pagination,slideCount):null;
+  const analysisFailed=measured.diagnostics.some(d=>d.severity==='error');
+  const invalidPagination=job.pageMode==='paginate'&&!analysisFailed&&!pagination;
+  const failed=analysisFailed||invalidPagination;
+  const diagnostics=invalidPagination
+    ?[...measured.diagnostics,diagnostic('PAGINATION_INVALID','분할한 문서 범위를 확인할 수 없습니다.')]
+    :job.exportResult?.diagnostics??measured.diagnostics;
+  const partial=partialSlides(job);
   const policy=measured.sizePolicy;
   const safePolicy=policy&&policy.targetWidthEmu!==undefined&&policy.targetHeightEmu!==undefined&&validSizePolicy({mode:policy.mode,targetWidthEmu:policy.targetWidthEmu,targetHeightEmu:policy.targetHeightEmu,marginColor:policy.marginColor})&&['original','first-slide','custom'].includes(policy.source)?{
     mode:'contain',targetWidthEmu:policy.targetWidthEmu,targetHeightEmu:policy.targetHeightEmu,marginColor:policy.marginColor,source:policy.source,...(policy.originalAspectMismatch===true?{originalAspectMismatch:true}:{}),
     slides:(Array.isArray(policy.slides)?policy.slides:[]).map((item,i)=>({slideId:`slide-${i+1}`,...Object.fromEntries(['sourceWidth','sourceHeight','scale','physicalScale','offsetX','offsetY','offsetXEmu','offsetYEmu'].filter(key=>Number.isFinite(item?.[key])).map(key=>[key,item[key]]))}))
   }:null;
   return {id:job.id,fileName:job.fileName,sourceType,targetType,status:failed?'failed':'analyzed',profile:job.input.profile,sourceDigest:job.input.source.sha256,
-    ...(safePolicy?{sizePolicy:safePolicy}:{}),...(measured.environment?.previewKind==='source'?{previewKind:'source'}:{}),
-    slideCount:measured.model?.slides.length??0,objectCount:measured.model?.slides.flatMap(s=>s.nodes).filter(n=>n.kind!=='group').length??0,
+    ...(safePolicy?{sizePolicy:safePolicy}:{}),...(!failed&&pagination?{pagination}:{}),...(measured.environment?.previewKind==='source'?{previewKind:'source'}:{}),
+    slideCount,objectCount:measured.model?.slides.flatMap(s=>s.nodes).filter(n=>n.kind!=='group').length??0,
     diagnostics:developmentReports?diagnostics:diagnostics.map(d=>publicDiagnostic(d,measured.model?.slides)),exportAvailable:!failed&&!job.exporting,partialExportAvailable:Boolean(partial&&!job.exporting),partialSlideCount:partial?.included.length??0,excludedSlideNumbers:partial?.excludedSlideNumbers??[],downloadSlideCount:job.partialExport?partial?.included.length??0:measured.model?.slides.length??0,visualQuality:'unmeasured',
     exportStatus:job.exporting?'converting':job.exportResult?.status??'pending',
     downloadUrl:job.exportResult?.status==='generated'?`/api/jobs/${job.id}/download`:null,
@@ -170,19 +178,23 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
           if(!['html','pptx'].includes(sourceType))return json(res,400,{error:'HTML 또는 PPTX 파일이 필요합니다.'});
           const targetType=sourceType==='html'?'pptx':'html';let input;
           if(sourceType==='pptx'){
-            if(body.html!==undefined||body.assets!==undefined||body.slideSelector!==undefined||body.sizePolicy!==undefined||body.viewport!==undefined||body.fileName!==undefined&&(typeof body.fileName!=='string'||!/\.pptx$/i.test(body.fileName)))return json(res,400,{error:'PPTX 파일 하나를 선택해 주세요.'});
+            if(body.html!==undefined||body.assets!==undefined||body.slideSelector!==undefined||body.sizePolicy!==undefined||body.viewport!==undefined||body.pageMode!==undefined||body.fileName!==undefined&&(typeof body.fileName!=='string'||!/\.pptx$/i.test(body.fileName)))return json(res,400,{error:'PPTX 파일 하나를 선택해 주세요.'});
             const options=body.pptxOptions===undefined?{}:body.pptxOptions;
             if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(k=>!['fontPolicy','allowPartial'].includes(k))||options.fontPolicy!==undefined&&!['original','malgun-gothic','pretendard'].includes(options.fontPolicy)||options.allowPartial!==undefined&&typeof options.allowPartial!=='boolean')return json(res,400,{error:'PPTX 글꼴과 부분 변환 설정을 확인해 주세요.'});
             input={bytes:decodeBase64(body.pptxBase64,64*1024*1024),options:{fontPolicy:options.fontPolicy??'original',allowPartial:options.allowPartial??false}};
           }else{
             if(body.pptxBase64!==undefined||body.pptxOptions!==undefined)return json(res,400,{error:'HTML과 PPTX를 한 번에 입력할 수 없습니다.'});
+            if(body.pageMode!==undefined&&(body.pageMode!=='paginate'||body.slideSelector!=null||
+              Object.keys(body).some(key=>!['sourceType','html','assets','fileName','slideSelector','viewport','sizePolicy','pageMode'].includes(key)))){
+              return json(res,400,{error:'문서 분할은 영역을 지정하지 않은 HTML 전체에만 적용할 수 있습니다.'});
+            }
             if(body.sizePolicy!==undefined&&!validSizePolicy(body.sizePolicy))return json(res,400,{error:'PPT 크기는 각 변이 1~56인치여야 합니다. 크기와 여백 설정을 확인해 주세요.'});
             if(body.assets!==undefined&&!Array.isArray(body.assets))return json(res,400,{error:'자산 목록은 배열이어야 합니다.'});
             const assets=(body.assets??[]).map(a=>({path:a?.path,mime:a?.mime||undefined,bytes:decodeBase64(a?.base64,16*1024*1024)}));
-            input={html:body.html,assets,slideSelector:body.slideSelector??null,allowTableOverlay:true,...(body.viewport!==undefined?{viewport:body.viewport}:{}),...(body.sizePolicy!==undefined?{sizePolicy:body.sizePolicy}:{})};
+            input={html:body.html,assets,slideSelector:body.slideSelector??null,allowTableOverlay:true,...(body.viewport!==undefined?{viewport:body.viewport}:{}),...(body.sizePolicy!==undefined?{sizePolicy:body.sizePolicy}:{}),...(body.pageMode==='paginate'?{pageMode:'paginate'}:{})};
           }
           const abortController=clientRequest?.controller??new AbortController();
-          const id=jobs.create(ownerId,{direction:`${sourceType}-to-${targetType}`,sourceType,targetType,fileName:typeof body.fileName==='string'?body.fileName.slice(0,200):(sourceType==='pptx'?'입력.pptx':'입력 HTML'),input,abortController,clientRequestKey});
+          const id=jobs.create(ownerId,{direction:`${sourceType}-to-${targetType}`,sourceType,targetType,pageMode:input.pageMode,fileName:typeof body.fileName==='string'?body.fileName.slice(0,200):(sourceType==='pptx'?'입력.pptx':'입력 HTML'),input,abortController,clientRequestKey});
           if(clientRequest){clientRequest.jobId=id;clientRequest.state='running';}
           if(abortController.signal.aborted){await jobs.delete(ownerId,id);return json(res,409,{code:'JOB_CANCELLED',error:'요청이 취소되었습니다.'});}
           const operation=sourceType==='pptx'?'analyze-pptx':'analyze-html';
@@ -197,7 +209,7 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
             const saved=jobs.get(ownerId,id);if(!saved)return missing(res);
             const summary=summarize(saved),statusCode=summary.status==='failed'?422:200;
             const {diagnostics,model}=result.measured;
-            const failures=statusCode===422?diagnostics:diagnostics.filter(item=>item.code==='PPTX_PREVIEW_UNAVAILABLE');
+            const failures=statusCode===422?(diagnostics.some(item=>item.severity==='error')?diagnostics:summary.diagnostics):diagnostics.filter(item=>item.code==='PPTX_PREVIEW_UNAVAILABLE');
             if(failures.length)await errorLogger({...logContext,operation:statusCode===422?operation:'preview-pptx',statusCode,diagnostics:failures,slides:model?.slides,resourceUsage:result.resourceUsage});
             return json(res,statusCode,summary);
           }catch(error){await jobs.delete(ownerId,id);throw error;}
@@ -214,7 +226,8 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
         if(job.exporting||!job.measured)return json(res,409,{error:'이미 장표를 처리 중입니다.'});
         const partial=body.partial===true?partialSlides(job):null;
         if(body.partial!==undefined&&typeof body.partial!=='boolean'||body.partial===true&&!partial)return json(res,422,summarize(job));
-        if(!partial&&job.measured.diagnostics.some(d=>d.severity==='error'))return json(res,422,summarize(job));
+        const summary=summarize(job);
+        if(!partial&&summary.status==='failed')return json(res,422,summary);
         if(job.exportResult?.status==='generated')return json(res,200,summarize(job));
         if(active>=2)return json(res,429,{error:'다른 장표를 처리 중입니다. 잠시 뒤 다시 실행해 주세요.'});
         active++;

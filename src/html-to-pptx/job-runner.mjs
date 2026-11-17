@@ -15,10 +15,14 @@ function validateInput(operation,input){
   if(!operations.has(operation))throw failure('INPUT_INVALID');
   if(operation==='analyze-html'||operation==='inspect-html'||operation==='verify-html-selection'||operation==='analyze-html-selection'){
     if(!input||typeof input.html!=='string'||!Array.isArray(input.assets??[]))throw failure('INPUT_INVALID');
+    if(input.pageMode!==undefined&&(operation!=='analyze-html'||input.pageMode!=='paginate'||input.slideSelector!=null||
+      input.snapshotId!==undefined||input.choiceId!==undefined))throw failure('INPUT_INVALID');
     if(input.sizePolicy!==undefined&&!validSizePolicy(input.sizePolicy))throw failure('INPUT_INVALID');
     if(input.viewport!==undefined&&(!input.viewport||typeof input.viewport!=='object'||Array.isArray(input.viewport)||Object.keys(input.viewport).some(key=>!['width','height'].includes(key))||!Number.isSafeInteger(input.viewport.width)||!Number.isSafeInteger(input.viewport.height)||input.viewport.width<1||input.viewport.height<1||input.viewport.width>8192||input.viewport.height>8192))throw failure('INPUT_INVALID');
-    if(operation!=='analyze-html'){
-      const allowed=new Set(['html','assets','slideSelector','allowTableOverlay','viewport','sizePolicy',...(['verify-html-selection','analyze-html-selection'].includes(operation)?['snapshotId','choiceId']:[])]);
+    if(operation!=='analyze-html'||input.pageMode==='paginate'){
+      const allowed=new Set(['html','assets','slideSelector','allowTableOverlay','viewport','sizePolicy',
+        ...(['verify-html-selection','analyze-html-selection'].includes(operation)?['snapshotId','choiceId']:[]),
+        ...(input.pageMode==='paginate'?['pageMode']:[])]);
       if(Object.keys(input).some(key=>!allowed.has(key))||(input.assets??[]).length>4096)throw failure('INPUT_INVALID');
       if(input.slideSelector!==undefined&&input.slideSelector!==null&&(typeof input.slideSelector!=='string'||input.slideSelector.length>4096))throw failure('INPUT_INVALID');
       if(input.allowTableOverlay!==undefined&&typeof input.allowTableOverlay!=='boolean')throw failure('INPUT_INVALID');
@@ -28,7 +32,7 @@ function validateInput(operation,input){
     let total=0;
     for(const asset of input.assets??[]){
       if(!asset||!(asset.bytes instanceof Uint8Array))throw failure('INPUT_INVALID');
-      if(operation!=='analyze-html'&&(Object.keys(asset).some(key=>!['path','mime','bytes'].includes(key))||typeof asset.path!=='string'||asset.path.length>4096||asset.mime!==undefined&&(typeof asset.mime!=='string'||asset.mime.length>128)))throw failure('INPUT_INVALID');
+      if((operation!=='analyze-html'||input.pageMode==='paginate')&&(Object.keys(asset).some(key=>!['path','mime','bytes'].includes(key))||typeof asset.path!=='string'||asset.path.length>4096||asset.mime!==undefined&&(typeof asset.mime!=='string'||asset.mime.length>128)))throw failure('INPUT_INVALID');
       if(asset.bytes.byteLength>16*MiB||(total+=asset.bytes.byteLength)>64*MiB)throw failure('INPUT_LIMIT',413);
     }
   }else if(operation==='read-pptx'||operation==='analyze-pptx'){
@@ -58,9 +62,14 @@ try {
   exit 1
 }`;
 
-async function processRows(){
+const WINDOWS_CENSUS_TIMEOUT_MS = 5000;
+// A busy Windows host can take longer to enumerate the running browser tree.
+// Keep one bounded active query, and cancel if identity or RSS is still unknown.
+const WINDOWS_ACTIVE_CENSUS_TIMEOUT_MS = 8000;
+
+async function processRows(windowsTimeoutMs=WINDOWS_CENSUS_TIMEOUT_MS){
   if(process.platform==='win32'){
-    const {stdout}=await execute('powershell.exe',['-NoProfile','-NonInteractive','-Command',windowsCensus],{windowsHide:true,timeout:5000,maxBuffer:1024*1024});
+    const {stdout}=await execute('powershell.exe',['-NoProfile','-NonInteractive','-Command',windowsCensus],{windowsHide:true,timeout:windowsTimeoutMs,maxBuffer:1024*1024});
     const rows=JSON.parse(stdout);
     if(!Array.isArray(rows)||!rows.length||rows.some(row=>!Number.isInteger(row?.pid)||!Number.isInteger(row.parent)||row.created!==null&&(typeof row.created!=='string'||!/^\d{1,20}$/.test(row.created))))throw failure('OBSERVER_QUERY_FAILED',500);
     return rows;
@@ -69,8 +78,8 @@ async function processRows(){
   return Promise.all(stdout.trim().split('\n').map(async line=>{const [pid,parent,rss]=line.trim().split(/\s+/).map(Number);const stat=await fs.readFile(`/proc/${pid}/stat`,'utf8').catch(()=>null);return {pid,parent,rss:rss*1024,created:stat?.slice(stat.lastIndexOf(')')+2).split(' ')[19]};}));
 }
 
-async function processTree(owned,initialPid=null){
-  const rows=await processRows();
+async function processTree(owned,initialPid=null,windowsTimeoutMs){
+  const rows=await processRows(windowsTimeoutMs);
   if(initialPid){const worker=rows.find(row=>row.pid===initialPid);if(!worker?.created)throw failure('OBSERVER_IDENTITY_UNAVAILABLE',500);owned.set(worker.pid,worker.created);}
   if(rows.some(row=>owned.has(row.pid)&&!row.created))throw failure('OBSERVER_IDENTITY_UNAVAILABLE',500);
   const ids=new Set(rows.filter(row=>row.created&&owned.get(row.pid)===row.created).map(row=>row.pid));
@@ -186,7 +195,7 @@ export async function runConversion({input,operation,signal,limits={}}={}){
     const abort=()=>stop(failure('JOB_CANCELLED',409));
     const sample=(initial=false)=>{
       if(sampling||finishing)return;
-      const observe=()=>processTree(owned,initial?child.pid:null).catch(cause=>{throw observerCause(cause);});
+      const observe=()=>processTree(owned,initial?child.pid:null,initial?WINDOWS_CENSUS_TIMEOUT_MS:WINDOWS_ACTIVE_CENSUS_TIMEOUT_MS).catch(cause=>{throw observerCause(cause);});
       sampling=observe().catch(error=>{
         // Before the worker receives input, one timed-out census can be retried safely.
         if(initial&&error.code==='OBSERVER_TIMEOUT'&&stoppedAt===null&&!finishing)return observe();
