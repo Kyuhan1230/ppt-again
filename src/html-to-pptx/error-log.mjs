@@ -11,7 +11,7 @@ const sourceFiles=new Set([
   'input.mjs','job-runner.mjs','job-store.mjs','measure.mjs','powerpoint-chart-images.mjs',
   'read-pptx.mjs','server.mjs'
 ]);
-const operations=new Set(['analyze-html','analyze-pptx','cli','export-html','export-pptx','http','preview-pptx','read-pptx','server-start']);
+const operations=new Set(['analyze-html','analyze-html-selection','analyze-pptx','cli','export-html','export-pptx','http','inspect-html','preview-pptx','read-pptx','server-start']);
 const errorCodes=new Set([
   'ASSET_INVALID','ASSET_LIMIT','EXPORT_FAILED','INPUT_INVALID','INPUT_LIMIT',
   'JOB_BUSY','JOB_CANCELLED','JOB_CLEANUP_FAILED','JOB_FAILED','JOB_MEMORY_LIMIT','JOB_OBSERVER_FAILED',
@@ -74,10 +74,12 @@ function safeDiagnostic(item,slides){
   return error?{...diagnostic,error}:diagnostic;
 }
 
+export const safeLogOperation=value=>operations.has(value)?value:undefined;
+
 function errorRecord(event,time){
   const record={
     time:time.toISOString(),
-    operation:operations.has(event.operation)?event.operation:'http',
+    operation:safeLogOperation(event.operation)??'http',
     nodeVersion:process.version,
     platform:process.platform
   };
@@ -85,6 +87,7 @@ function errorRecord(event,time){
   for(const key of ['sourceType','targetType'])if(sourceTypes.has(event[key]))record[key]=event[key];
   if(nonNegativeInteger(event.inputBytes))record.inputBytes=event.inputBytes;
   if(Number.isInteger(event.statusCode)&&event.statusCode>=100&&event.statusCode<=599)record.statusCode=event.statusCode;
+  if(event.cliExitCode===1||event.cliExitCode===2)record.cliExitCode=event.cliExitCode;
   const usage={};
   for(const key of ['elapsedMs','rssSamples','peakRssBytes','terminationMs']){
     if(nonNegativeInteger(event.resourceUsage?.[key]))usage[key]=event.resourceUsage[key];
