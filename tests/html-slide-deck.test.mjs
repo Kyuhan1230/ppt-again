@@ -87,3 +87,38 @@ test('a verified installed font stays native in a hidden SVG frame',async t=>{
   assert.equal(output.status,'generated',JSON.stringify(output.diagnostics));
   assert.match(strFromU8(unzipSync(output.pptxBytes)['ppt/slides/slide2.xml']),/typeface="Pretendard"/);
 });
+
+test('oversized deck previews preserve all four edges and the original screen CSS',async()=>{
+  const edges='<div class="left"></div><div class="right"></div><div class="top"></div><div class="bottom"></div>';
+  const html=deck().replace('One</p>','One</p>'+edges).replace('Two</p>','Two</p>'+edges)+`<style>
+    html,body{margin:0;overflow:hidden;background:black}
+    main{left:calc((100vw - 400px)/2);top:calc((100vh - 300px)/2)}
+    .left,.right,.top,.bottom{position:absolute;width:16px;height:16px}
+    .left{left:0;top:50%;background:red}
+    .right{right:0;top:50%;background:blue}
+    .top{left:50%;top:0;background:lime}
+    .bottom{left:50%;bottom:0;background:yellow}
+    @media(min-width:300px){.left{background:fuchsia}}
+  </style>`;
+  const input=await readInput({html}),viewport={width:260,height:220};
+  const measured=await measureInput(input,runtime,{viewport});
+  assert.deepEqual(measured.diagnostics,[]);
+  assert.deepEqual(measured.previews.map(p=>[p.width,p.height]),[[400,300],[400,300]]);
+
+  const {page,context}=await runtime.render(input,{viewport});
+  try{
+    for(const preview of measured.previews){
+      const colors=await page.evaluate(async src=>{
+        const image=new Image();image.src=src;await image.decode();
+        const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;
+        const ctx=canvas.getContext('2d');ctx.drawImage(image,0,0);
+        return [[4,154],[394,154],[204,4],[204,294]].map(([x,y])=>Array.from(ctx.getImageData(x,y,1,1).data));
+      },'data:image/png;base64,'+Buffer.from(preview.bytes).toString('base64'));
+      assert.deepEqual(colors,[[255,0,0,255],[0,0,255,255],[0,255,0,255],[255,255,0,255]],preview.slideId);
+    }
+  }finally{await context.close();}
+
+  const withoutPreview=await measureInput(input,{...runtime,capture:false},{viewport});
+  assert.deepEqual(measured.model,withoutPreview.model);
+  assert.deepEqual(measured.measurements,withoutPreview.measurements);
+});

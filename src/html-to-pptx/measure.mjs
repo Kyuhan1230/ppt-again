@@ -15,6 +15,7 @@ import {scanHtmlRegions} from './html-region-scan.mjs';
 import {measurePage} from './html-object-readers.mjs';
 import {normalizeSlideSizes} from './slide-size-policy.mjs';
 import {findSlideDeck,withSlideFrame} from './html-slide-deck.mjs';
+import {createDeckPreviewCapture} from './html-slide-preview.mjs';
 
 export function scopeEmbeddedModelErrors(errors,slides){
   return errors.map(error=>{const match=/^slides\[(\d+)\]\./.exec(error.path),slide=match?slides[Number(match[1])]:null;return diagnostic('INPUT_INVALID',`${error.path}: ${error.message}`,slide?{slideId:slide.id}:{});});
@@ -393,6 +394,7 @@ export async function measureInput(input,runtime,options={}) {
       }
     }
     await attachFonts();
+    const captureDeckPreview=deck&&runtime.capture?createDeckPreviewCapture(session):null;
     const captureSlideArtifacts=async(selector,slides,measurements)=>{
     if(!result.diagnostics.some(d=>d.severity==='error')) {
       for(const slide of slides)for(const node of slide.nodes.filter(n=>n.kind==='image'&&n.content.tableBackground)){
@@ -405,7 +407,12 @@ export async function measureInput(input,runtime,options={}) {
     }
     if(runtime.capture&&!result.diagnostics.some(d=>d.code==='SLIDE_ROOT_REQUIRED')) {
       for(const [index,m] of measurements.entries()) {
-        const root=session.page.locator(selector).nth(index),bytes=await root.screenshot({animations:'disabled',scale:'css'});
+        const root=session.page.locator(selector).nth(index);
+        const bytes=captureDeckPreview?await captureDeckPreview(root):await root.screenshot({animations:'disabled',scale:'css'});
+        if(!bytes){
+          result.diagnostics.push(diagnostic('HTML_PREVIEW_UNAVAILABLE','장표 전체가 보이는 미리보기를 만들 수 없습니다. 다운로드한 PPT에서 배치를 확인해 주세요.',{slideId:m.slideId},'warning'));
+          continue;
+        }
         const width=bytes.readUInt32BE(16),height=bytes.readUInt32BE(20);
         result.previews.push({slideId:m.slideId,bytes:new Uint8Array(bytes),width,height});
       }
