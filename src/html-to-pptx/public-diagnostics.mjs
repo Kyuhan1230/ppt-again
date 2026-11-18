@@ -78,6 +78,10 @@ const knownObjectErrors=new Map([
 // Fixed reasons plus narrowly bounded labels cross the UI boundary. Never
 // forward exception text, selectors, source paths, or an arbitrary message.
 const reasons={
+  HTML_DECLARED_SLIDE_HIDDEN:'장표 표식은 있지만 화면에서 숨겨져 있어 측정하지 못했습니다. 장표를 화면에 표시한 뒤 다시 변환해 주세요.',
+  HTML_BORDER_STYLE_UNSUPPORTED:'실선으로 그린 단색 테두리만 편집 가능한 선으로 옮길 수 있습니다.',
+  HTML_BORDER_CORNER_UNSUPPORTED:'둥근 모서리나 이웃 테두리와 만나는 모서리는 직선으로 그리면 모양이 달라집니다.',
+  HTML_BORDER_COMPOSITION_UNSUPPORTED:'이 테두리는 그림, 여러 조각, 투명도 또는 변환 효과와 함께 그려져 선으로 분리하기 어렵습니다.',
   PAGINATION_TIMEOUT:'시간 안에 문서 전체의 배치를 확인할 수 없습니다. 문서를 작은 구간으로 나눠 다시 분석해 주세요.',
   PAGINATION_LAYOUT_UNSUPPORTED:'숨긴 내용, 스크롤 영역, 겹침 또는 표현을 재현하기 어려운 서식이 있어 분할할 수 없습니다. 원본의 해당 배치를 정리한 뒤 다시 분석해 주세요.',
   PAGINATION_OVERSIZE:'한 장에 들어가지 않는 객체나 겹친 요소 묶음이 있습니다. PPT 크기를 늘리거나 원본에서 해당 내용을 나눠 주세요.',
@@ -368,6 +372,11 @@ export function publicDiagnostic(item,slides=[]){
   if(item.blocking===true&&severity==='error'){result.blocking=true;result.message='변환 중단: '+result.message;}
   if(Object.hasOwn(reasons,item.reasonKey)){
     result.reasonKey=item.reasonKey;result.reason=reasons[item.reasonKey];
+    if(code==='SLIDE_ROOT_REQUIRED'&&item.reasonKey==='HTML_DECLARED_SLIDE_HIDDEN')result.message=result.reason;
+    if(code==='UNSUPPORTED_OBJECT'&&item.reasonKey.startsWith('HTML_BORDER_')&&['위','오른쪽','아래','왼쪽'].includes(item.borderSide)){
+      const name=safeLabel(item.objectName);
+      result.message=`${name?name+' 객체의 ':''}${item.borderSide}쪽 테두리를 생략했습니다. ${result.reason}`;
+    }
     if(code==='PAGINATION_UNSUPPORTED'&&['PAGINATION_TIMEOUT','PAGINATION_LAYOUT_UNSUPPORTED','PAGINATION_OVERSIZE'].includes(item.reasonKey))result.message=result.reason;
     if((item.reasonKey==='SIZE_ORIGINAL_ASPECT_OVERRIDE'&&item.code==='UNSUPPORTED_OBJECT'&&severity==='warning')||(['SIZE_ORIGINAL_ASPECT_MISMATCH','SIZE_TARGET_OUT_OF_RANGE'].includes(item.reasonKey)&&item.code==='INPUT_INVALID'&&severity==='error'))result.message=reasons[item.reasonKey];
     if(['HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED','HTML_PPTX_BULLET_LAYOUT_APPROXIMATED','HTML_PPTX_SHADOW_OMITTED','PPTX_PARAGRAPH_INDENT_APPROXIMATED','PPTX_PARAGRAPH_SPACING_APPROXIMATED','PPTX_LINE_SPACING_APPROXIMATED','PPTX_TEXT_BASELINE_APPROXIMATED','PPTX_PARAGRAPH_ALIGNMENT_APPROXIMATED','PPTX_INHERITED_SIZE_APPROXIMATED','PPTX_AUTONUM_APPROXIMATED','PPTX_TEXT_TAB_APPROXIMATED','PPTX_TEXT_HIGHLIGHT_APPROXIMATED','PPTX_TABLE_TEXT_COLOR_APPROXIMATED','PPTX_EMBEDDED_FONT_LOCAL_ONLY'].includes(item.reasonKey)&&severity==='warning')result.message=reasons[item.reasonKey];

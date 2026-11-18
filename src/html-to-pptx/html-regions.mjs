@@ -2,6 +2,7 @@ import {sha256} from './assets.mjs';
 import {applyFallbackFont} from './fallback-font.mjs';
 import {installedNativeAliases} from './font-profiles.mjs';
 import {scanHtmlRegions} from './html-region-scan.mjs';
+import {findSlideDeck} from './html-slide-deck.mjs';
 
 const invalid=code=>Object.assign(new Error(code),{code});
 const digest=value=>sha256(JSON.stringify(value));
@@ -32,10 +33,12 @@ export async function inspectInput(input,runtime,{viewport={width:1280,height:96
   let session=providedSession,preview=null;
   try{
     session??=await runtime.render(input,{viewport});
-    const fallback=input.profile==='static-slides-v1'?await applyFallbackFont(session.page,installedNativeAliases()):[];
+    const deck=input.profile==='static-slides-v1'?await findSlideDeck(session.page,input.source.slideSelector??undefined):null;
+    const deckPaths=deck?.frames.map(f=>f.path);
+    const fallback=input.profile==='static-slides-v1'?await applyFallbackFont(session.page,installedNativeAliases(),deckPaths):[];
     await session.page.evaluate(()=>document.fonts.ready);
     let observed;
-    const scanOptions={selector:input.source.slideSelector,svgPaths:input.profile==='svg-slides-v1'?input.svgRootPaths:[]};
+    const scanOptions={selector:input.source.slideSelector,svgPaths:input.profile==='svg-slides-v1'?input.svgRootPaths:[],deckPaths};
     try{observed=await session.page.evaluate(scanHtmlRegions,scanOptions);}
     catch(error){if(/INPUT_LIMIT/.test(error.message))throw invalid('INPUT_LIMIT');if(/INPUT_INVALID/.test(error.message))throw invalid('INPUT_INVALID');throw error;}
     await new Promise(resolve=>setTimeout(resolve,60));

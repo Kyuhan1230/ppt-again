@@ -1,5 +1,5 @@
 // Runs inside a script-disabled browser. This is repository-owned measurement code.
-export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTableOverlay=false,nativeAliases=[],charts=[],tablesOnly=false}) {
+export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,allowTableOverlay=false,nativeAliases=[],charts=[],tablesOnly=false,slideOffset=0}) {
   const editable=['editable-slides-v1','editable-slides-v2'].includes(profile),declared=editable||profile==='project-data-v1';
   const diagnostics=[];
   const issue=(code,message,slideId=null,nodeId=null,sourceRef=null)=>diagnostics.push({code,severity:'error',slideId,nodeId,sourceRef,message});
@@ -41,10 +41,17 @@ export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,a
       // only our own zero-width presentation hint before measuring that edit.
       if(generated&&!current&&presentationOnly){mark.removeAttribute('data-pptx-hanging-punct');for(const property of ['display','width','line-height','white-space'])mark.style.removeProperty(property);if(parseFloat(mark.style.textIndent)===0)mark.style.removeProperty('text-indent');}
     }
-    const id=(declared?root.dataset.slideId:null)||root.id||`slide-${slideIndex+1}`;
+    const id=(declared?root.dataset.slideId:null)||root.id||`slide-${slideOffset+slideIndex+1}`;
     const rootStyle=getComputedStyle(root),before=root.getBoundingClientRect();
     const width=!declared?before.width:parseFloat(rootStyle.width),height=!declared?before.height:parseFloat(rootStyle.height);
-    if(!width||!height) {issue('SLIDE_ROOT_REQUIRED','장표의 너비와 높이를 확인할 수 없습니다.',id,null,{slideId:id,path:root.dataset.sourcePath??selector});continue;}
+    if(profile==='static-slides-v1'&&root.hasAttribute('data-slide')&&
+       !root.checkVisibility({opacityProperty:true,visibilityProperty:true})){
+      diagnostics.push({code:'SLIDE_ROOT_REQUIRED',severity:'error',reasonKey:'HTML_DECLARED_SLIDE_HIDDEN',
+        slideId:id,slideNumber:slideOffset+slideIndex+1,nodeId:null,sourceRef:{slideId:id,path:root.dataset.sourcePath??selector},
+        message:'장표 표식은 있지만 현재 화면에서 장표를 열 수 없습니다.'});
+      continue;
+    }
+      if(!width||!height) {issue('SLIDE_ROOT_REQUIRED','장표의 너비와 높이를 확인할 수 없습니다.',id,null,{slideId:id,path:root.dataset.sourcePath??selector});diagnostics.at(-1).slideNumber=slideOffset+slideIndex+1;continue;}
     if(roots.some(r=>r!==root&&r.contains(root))){issue('SLIDE_ROOT_REQUIRED','장표 루트가 중첩됩니다.',id);continue;}
     if(rootStyle.transform!=='none') {const m=new DOMMatrix(rootStyle.transform);if(!editable||m.b!==0||m.c!==0||m.a<=0||Math.abs(m.a-m.d)>.0001){issue('UNSUPPORTED_OBJECT','장표 루트의 변환은 현재 화면 크기에서 지원하지 않습니다.',id);continue;}}
     const sourceTransformScale=before.width/width;
@@ -733,10 +740,12 @@ export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,a
         else if(el!==root&&!inlineParent&&(visibleColor(st.backgroundColor)||['Top','Right','Bottom','Left'].some(side=>parseFloat(st[`border${side}Width`])>0&&st[`border${side}Style`]!=='none'&&visibleColor(st[`border${side}Color`]))||st.backgroundImage!=='none'))kind='shape';
         else {addDirect();continue;}
       }
+      const borderNames=['Top','Right','Bottom','Left'];
+      const borderParts=[];
+      let separateBorder=false,borderInsets=null,ellipse=false;
       if(!declared&&el.tagName!=='HR'&&['shape','text','image'].includes(kind)){
-        const sides=['Top','Right','Bottom','Left'].map(side=>({width:parseFloat(st[`border${side}Width`])||0,style:st[`border${side}Style`],color:st[`border${side}Color`]}));
+        const sides=borderNames.map(side=>({width:parseFloat(st[`border${side}Width`])||0,style:st[`border${side}Style`],color:st[`border${side}Color`]}));
         const shown=sides.map(side=>side.width>0&&side.style!=='none'&&side.style!=='hidden'&&visibleColor(side.color));
-        if(shown.some(Boolean)&&(!shown.every(Boolean)||sides.some(side=>side.width!==sides[0].width||side.style!==sides[0].style||side.color!==sides[0].color)))at('UNSUPPORTED_OBJECT','서로 다른 방향의 테두리는 아직 보존할 수 없습니다.');
         const hasBackground=visibleColor(st.backgroundColor)||st.backgroundImage!=='none';
         if(hasBackground&&st.backgroundClip.split(',').some(value=>{
           const clip=value.trim();
@@ -744,7 +753,64 @@ export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,a
         }))at('UNSUPPORTED_OBJECT','안쪽에만 칠하는 배경은 아직 보존할 수 없습니다.');
         const radii=['TopLeft','TopRight','BottomRight','BottomLeft'].map(side=>st[`border${side}Radius`]);
         const rounded=radii.some(value=>parseFloat(value)>0);
-        if(rounded&&(kind==='image'||radii.some(value=>value!==radii[0]||value.includes('%')||value.trim().split(/\s+/).length>1)))at('UNSUPPORTED_OBJECT','그림이나 서로 다른 모서리의 둥근 효과는 아직 보존할 수 없습니다.');
+        ellipse=kind!=='image'&&radii.every(value=>value==='50%')&&st.backgroundImage==='none';
+        if(shown.some(Boolean)&&(!shown.every(Boolean)||sides.some(side=>side.width!==sides[0].width||side.style!==sides[0].style||side.color!==sides[0].color))){
+          separateBorder=true;
+          const directions=['위','오른쪽','아래','왼쪽'];
+          const report=(i,reasonKey)=>{
+            diagnostics.push({code:'UNSUPPORTED_OBJECT',severity:'warning',reasonKey,slideId:id,nodeId,sourceRef,
+              message:'편집 가능한 선으로 보존할 수 없는 테두리를 생략했습니다.',
+              objectType:kind,borderSide:directions[i],objectName:nodeId,objectIndex:index+1});
+          };
+          const supported=sides.map((side,i)=>{
+            if(!shown[i])return false;
+            const horizontal=i%2===0;
+            if(kind==='image'||el===root||Number(st.opacity)!==1||st.transform!=='none'||el.getClientRects().length!==1||
+               side.width>(horizontal?box.h:box.w)||side.width>1024){
+              report(i,'HTML_BORDER_COMPOSITION_UNSUPPORTED');return false;
+            }
+            if(side.style!=='solid'||st.borderImageSource!=='none'){
+              report(i,'HTML_BORDER_STYLE_UNSUPPORTED');return false;
+            }
+            if(rounded){
+              report(i,'HTML_BORDER_CORNER_UNSUPPORTED');return false;
+            }
+            return true;
+          });
+          const {x,y,w,h}=box;
+          for(const [i,side] of sides.entries()){
+            if(!supported[i])continue;
+            const horizontal=i%2===0,half=side.width/2;
+            const start=sides[horizontal?3:0].width,end=sides[horizontal?1:2].width;
+            const length=round((horizontal?w:h)-start-end);
+            if(length<=0)continue;
+            const edge=horizontal?{x:round(x+start),y:round(y+(i===0?half:h-half)),w:length,h:0}
+              :{x:round(x+(i===3?half:w-half)),y:round(y+start),w:0,h:length};
+            borderParts.push({name:borderNames[i].toLowerCase(),box:edge,kind:'line',style:{svgGeometry:true,
+              endpoints:{start:{x:edge.x,y:edge.y},end:{x:round(edge.x+edge.w),y:round(edge.y+edge.h)}},
+              stroke:side.color,strokeWidth:side.width}});
+          }
+          // The straight line ends at the next border. Two triangles fill
+          // each square join along the same diagonal as the CSS border.
+          const corners=[[0,3,false,false],[0,1,true,false],[2,1,true,true],[2,3,false,true]];
+          for(const [i,[horizontal,vertical,right,bottom]] of corners.entries()){
+            const cw=sides[vertical].width,ch=sides[horizontal].width;
+            if(!cw||!ch)continue;
+            const corner={x:round(x+(right?w-cw:0)),y:round(y+(bottom?h-ch:0)),w:cw,h:ch};
+            const addCorner=(index,flipH,flipV)=>{
+              if(supported[index])borderParts.push({name:`${borderNames[index].toLowerCase()}-corner-${i+1}`,
+                box:corner,kind:'shape',style:{shape:'rightTriangle',flipH,flipV,fill:sides[index].color}});
+            };
+            if(supported[horizontal]&&supported[vertical]&&sides[horizontal].color===sides[vertical].color){
+              borderParts.push({name:`corner-${i+1}`,box:corner,kind:'shape',style:{fill:sides[horizontal].color}});
+            }else{
+              addCorner(horizontal,!right,!bottom);
+              addCorner(vertical,right,bottom);
+            }
+          }
+          if(kind==='text'&&!nativeList&&!nativeParagraphGroup)borderInsets=sides;
+        }
+        if(rounded&&!ellipse&&(kind==='image'||radii.some(value=>value!==radii[0]||value.includes('%')||value.trim().split(/\s+/).length>1)))at('UNSUPPORTED_OBJECT','그림이나 서로 다른 모서리의 둥근 효과는 아직 보존할 수 없습니다.');
       }
       // PowerPoint does not inherit HTML ancestor overflow. Detect actual
       // clipping of emitted objects, not merely the presence of overflow.
@@ -770,6 +836,9 @@ export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,a
       if(kind==='text'&&el.querySelector('svg'))at('UNSUPPORTED_OBJECT','HTML 글자와 SVG가 같은 줄에 섞인 콘텐츠는 별도 요소로 나누어 주세요.');
       if(seen.has(nodeId)){at('INPUT_INVALID','중복 객체 ID입니다.');continue;}seen.add(nodeId);
       const style=kind==='chart'?{fontFamily:familyName(st.fontFamily),fontSize:parseFloat(st.fontSize),fontWeight:400,fontStyle:'normal',color:'#223845',opacity:1}:plainStyle(st);
+      if(ellipse)style.shape='ellipse';
+      if(separateBorder)Object.assign(style,{stroke:'transparent',strokeWidth:0,borderStyle:'none'});
+      if(borderInsets)borderInsets.forEach((side,i)=>{style.padding[borderNames[i].toLowerCase()]+=side.width;});
       if(kind==='text'&&el.hasAttribute('data-pptx-shape-outline')&&st.outlineStyle!=='none'&&parseFloat(st.outlineWidth)>0){
         const authored=parseFloat(el.style.outlineWidth),computed=parseFloat(st.outlineWidth);
         // Chromium quantizes computed outlines to device pixels. Preserve the
@@ -811,14 +880,27 @@ export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,a
       if(stacking.length>1)at('UNSUPPORTED_OBJECT','중첩된 CSS 겹침 문맥은 지원하지 않습니다.');
       style.cssZIndex=stacking.at(-1)??0;
       let content=kind==='image'?{assetId:el.dataset.assetId??null}:{};
+      const addBorderParts=()=>{
+        for(const {name,box,kind,style:appearance} of borderParts){
+          const base=`${nodeId}::border-${name}`;
+          let lineId=base,suffix=1;
+          while(seen.has(lineId)||elements.some(e=>e.id===lineId))lineId=`${base}-${++suffix}`;
+          seen.add(lineId);orderKeys.set(lineId,domOrder.get(el));
+          nodes.push({id:lineId,kind,boxCssPx:{...box},zOrder:order++,content:{},
+            style:{...appearance,opacity:1,cssZIndex:style.cssZIndex},sourceRef,parentId:null});
+          objects.push({nodeId:lineId,kind,boxCssPx:{...box}});
+        }
+      };
       if(kind==='text'){const value=await readTextObject({el,st,nodeId,sourceRef,style,nativeList,nativeParagraphGroup,children,paragraphLines,warnBulletLayout,at,box,text,relation});box=value.box;content=value.content;}
       if(kind==='image')content=readImageObject({el,st,at,content,nodeId,style,box,sourceRef});
       if(kind==='chart'){content=await readChartObject({el,st,at,style,chart});if(content===null)continue;}
       if(kind==='table'){content=await readTableObject({el,box,nodeId,style,sourceRef,at,warnBulletLayout});if(content===null)continue;}
       if(isSvg)content.inlineSvg=new XMLSerializer().serializeToString(el);
       orderKeys.set(nodeId,domOrder.get(el));
+      if(kind==='text')addBorderParts();
       nodes.push({id:nodeId,kind,boxCssPx:box,zOrder:order++,content,style,sourceRef,parentId:editable?(el.dataset.parentId??null):null,...(relation?{pptxOrigin:relation}:{})});
       objects.push({nodeId,kind,boxCssPx:box,...(kind==='text'?lineMetrics(el):{})});
+      if(kind!=='text')addBorderParts();
       addDirect();
     }
     const layoutStable=JSON.stringify(initialLayout)===JSON.stringify(elements.map(boxOf));

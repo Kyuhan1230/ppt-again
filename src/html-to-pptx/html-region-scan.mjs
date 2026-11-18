@@ -1,6 +1,6 @@
 // This function is serialized by Playwright and runs entirely in the page.
 // It does not mutate the source DOM or return text, selectors or paths.
-export function scanHtmlRegions({selector,svgPaths=[],maxRegions=500,maxRelations=50000,onlyExplicit=false}={}){
+export function scanHtmlRegions({selector,svgPaths=[],deckPaths=[],maxRegions=500,maxRelations=50000,onlyExplicit=false}={}){
   const fail=()=>{throw new Error('INPUT_LIMIT');};
   const body=document.body,viewport={width:innerWidth,height:innerHeight};
   const all=[...body.querySelectorAll('*')];if(all.length>100000)fail();
@@ -99,7 +99,7 @@ export function scanHtmlRegions({selector,svgPaths=[],maxRegions=500,maxRelation
     const clipped=r.right<=clip.left||r.left>=clip.right||r.bottom<=clip.top||r.top>=clip.bottom;
     const box=!st.hidden&&!clipped&&s.display!=='contents'&&r.width>0&&r.height>0?{x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height}:null;
     const visibility=st.hidden||clipped?'hidden':!box?'unmeasured':r.right<=0||r.bottom<=0||r.left>=innerWidth||r.top>=innerHeight?'offscreen':'visible';
-    const evidence=[];if(explicitSet.has(el))evidence.push('explicit-selector');if(declared.has(el))evidence.push('declared-slide');if(validatedSvg.has(el))evidence.push('validated-svg');if(stat.text||stat.media)evidence.push('visible-content');if(stat.paint)evidence.push('background');if(st.hidden)evidence.push('hidden');if(s.display==='contents')evidence.push('display-contents');
+    const evidence=[];if(explicitSet.has(el))evidence.push('explicit-selector');if(declared.has(el))evidence.push('declared-slide');if(deckPaths.includes(el.dataset.sourcePath))evidence.push('declared-deck-frame');if(validatedSvg.has(el))evidence.push('validated-svg');if(stat.text||stat.media)evidence.push('visible-content');if(stat.paint)evidence.push('background');if(st.hidden)evidence.push('hidden');if(s.display==='contents')evidence.push('display-contents');
     if(st.clip)uncertainties.add('clipped-or-scroll-content-not-observed');
     const features=[];let layoutComparable=true;
     if(box){

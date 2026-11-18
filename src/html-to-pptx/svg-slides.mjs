@@ -1,10 +1,10 @@
 import {diagnostic,validateModel} from './model.mjs';
 import {resolveAsset} from './assets.mjs';
-import {identifyFontMappings} from './font-profiles.mjs';
+import {identifyFontMappings,installedNativeAliases} from './font-profiles.mjs';
 
 // Repository-owned code in the script-disabled browser. SVG viewBox coordinates
 // define slides independently of the responsive page or its navigation scripts.
-async function measureSvgPage({paths,timeoutMs,fragments=false,selector='[data-slide]',slots=[]}) {
+async function measureSvgPage({paths,timeoutMs,fragments=false,selector='[data-slide]',slots=[],nativeAliases=[]}) {
   const diagnostics=[],slides=[],measurements=[],fonts=new Map();let artworkBytes=0;
   const issue=(message,slideId=null,nodeId=null,severity='error',code='UNSUPPORTED_OBJECT')=>diagnostics.push({code,severity,slideId,nodeId,sourceRef:null,message});
   const wait=p=>Promise.race([p,new Promise((_,reject)=>setTimeout(()=>reject(new Error('SVG resource timeout')),timeoutMs))]);
@@ -82,7 +82,13 @@ async function measureSvgPage({paths,timeoutMs,fragments=false,selector='[data-s
   const fontCheck=async name=>{
     if(fonts.has(name))return;
     const faces=[...document.fonts].filter(f=>f.family.replace(/^["']|["']$/g,'')===name);let available=false;
-    try{if(faces.length){await wait(document.fonts.load(`20px "${name.replaceAll('"','\\"')}"`));available=faces.every(f=>f.status==='loaded');}else{await wait(new FontFace('__svg_font_probe',`local("${name.replaceAll('"','\\"')}")`).load());available=true;}}catch{}
+    if(faces.length){
+      try{await wait(document.fonts.load(`20px ${JSON.stringify(name)}`));available=faces.every(f=>f.status==='loaded');}catch{}
+    }else{
+      for(const localName of [name,...nativeAliases.filter(a=>a.family===name).map(a=>a.localName)]){
+        try{await wait(new FontFace('__svg_font_probe',`local(${JSON.stringify(localName)})`).load());available=true;break;}catch{}
+      }
+    }
     fonts.set(name,{family:name,available,custom:faces.length>0});
   };
   for(const [slideIndex,root] of copies.entries()){
@@ -300,12 +306,12 @@ async function measureSvgPage({paths,timeoutMs,fragments=false,selector='[data-s
 export async function measureSvgFragments(session,{selector,timeoutMs,slots}){
   const paths=await session.page.evaluate(paths=>[...document.querySelectorAll('svg')].filter(el=>paths.includes(el.dataset.sourcePath)&&el.querySelector('text,image')).map(el=>el.dataset.sourcePath),slots.map(s=>s.path));
   if(!paths.length)return {fragments:[],diagnostics:[],fonts:[]};
-  const measured=await session.page.evaluate(measureSvgPage,{paths,timeoutMs,fragments:true,selector,slots});
+  const measured=await session.page.evaluate(measureSvgPage,{paths,timeoutMs,fragments:true,selector,slots,nativeAliases:installedNativeAliases()});
   return {fragments:measured.slides.map((slide,i)=>({slideId:slide.id,svgPath:slide.svgPath,nodes:slide.nodes,objects:measured.measurements[i].objects})),diagnostics:measured.diagnostics,fonts:measured.fonts};
 }
 
 export async function measureSvgInput(input,runtime,session,result){
-  const measured=await session.page.evaluate(measureSvgPage,{paths:input.svgRootPaths,timeoutMs:runtime.timeoutMs});
+  const measured=await session.page.evaluate(measureSvgPage,{paths:input.svgRootPaths,timeoutMs:runtime.timeoutMs,nativeAliases:installedNativeAliases()});
   await new Promise(resolve=>setTimeout(resolve,60));
   const after=await session.page.evaluate(()=>[...document.querySelectorAll('[data-measured-svg], [data-measured-svg] *')].map(e=>{const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height];}));
   const layoutStable=JSON.stringify(after)===JSON.stringify(measured.layoutSnapshot);
