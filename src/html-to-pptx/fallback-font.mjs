@@ -15,29 +15,38 @@ async function loadFallback(){
   }));
 }
 
-// Substitute only unavailable, visible HTML fonts; document scripts remain disabled.
-export async function applyFallbackFont(page,nativeAliases=[]){
-  const missing=await page.evaluate(async(nativeAliases)=>{
+// Also prepare the text belonging to verified deck frames before opening them.
+export async function applyFallbackFont(page,nativeAliases=[],deckPaths=[]){
+  const findCandidates=await page.evaluateHandle(deckPaths=>{
+    const frames=new Set(deckPaths);
+    return [...document.body.querySelectorAll('*')].flatMap(el=>{
+      const inDeck=frames.size&&frames.has(el.closest('[data-slide]')?.dataset.sourcePath);
+      if((!inDeck&&!el.getClientRects().length)||(el.closest('svg')&&(!inDeck||!el.matches('text,tspan'))))return [];
+      const st=getComputedStyle(el);
+      return st.visibility==='visible'?[{el,family:st.fontFamily.split(',')[0].trim().replace(/^['"]|['"]$/g,''),style:st.fontStyle,weight:Number(st.fontWeight)||400}]:[];
+    });
+  },deckPaths);
+  try{
+  const missing=await page.evaluate(async({candidates,nativeAliases})=>{
     await document.fonts.ready;
     const generic=new Set(['serif','sans-serif','monospace','system-ui','cursive','fantasy']);
-    const elements=[...document.body.querySelectorAll('*')].filter(el=>!el.closest('svg')&&el.getClientRects().length&&getComputedStyle(el).visibility==='visible');
-    const candidates=elements.map(el=>{const st=getComputedStyle(el);return {el,family:st.fontFamily.split(',')[0].trim().replace(/^['"]|['"]$/g,''),style:st.fontStyle,weight:Number(st.fontWeight)||400};});
-    const families=[...new Set(candidates.map(c=>c.family))],missing=[];
-    for(const family of families){if(generic.has(family))continue;const faces=[...document.fonts].filter(f=>f.family.replace(/^['"]|['"]$/g,'')===family);let available=false;
+    const missing=[];
+    for(const family of new Set(candidates.map(c=>c.family))){if(generic.has(family))continue;const faces=[...document.fonts].filter(f=>f.family.replace(/^['"]|['"]$/g,'')===family);let available=false;
       if(faces.length){try{const loaded=await document.fonts.load(`20px ${JSON.stringify(family)}`);available=loaded.length>0&&loaded.every(f=>f.status==='loaded');}catch{}}
       else{for(const name of [family,...nativeAliases.filter(a=>a.family===family).map(a=>a.localName)]){try{await new FontFace('__fallback_availability',`local(${JSON.stringify(name)})`).load();available=true;break;}catch{}}}
       if(!available)missing.push(family);
     }
     return missing;
-  },nativeAliases);
+  },{candidates:findCandidates,nativeAliases});
   if(!missing.length)return [];
   const fonts=await loadFallback();
-  const applied=await page.evaluate(async({missing,fonts})=>{
+  const applied=await page.evaluate(async({candidates,missing,fonts})=>{
     if([...document.fonts].some(face=>face.family.replace(/^['"]|['"]$/g,'')==='PPTAgainFallback'))throw new Error('Fallback font name already used by input');
     for(const font of fonts){const face=new FontFace('PPTAgainFallback',`url(data:font/ttf;base64,${font.base64})`,{weight:String(font.weight),style:'normal'});await face.load();document.fonts.add(face);}
-    let changed=0;const candidates=[...document.body.querySelectorAll('*')].filter(el=>!el.closest('svg')&&el.getClientRects().length&&getComputedStyle(el).visibility==='visible').map(el=>{const st=getComputedStyle(el);return {el,family:st.fontFamily.split(',')[0].trim().replace(/^['"]|['"]$/g,''),style:st.fontStyle,weight:Number(st.fontWeight)||400};});
-    for(const c of candidates)if(missing.includes(c.family)&&c.style==='normal'){c.el.style.setProperty('font-family','PPTAgainFallback','important');c.el.style.setProperty('font-weight',c.weight>=600?'700':'400','important');changed++;}
-    await document.fonts.ready;return changed;
-  },{missing,fonts:fonts.map(f=>({weight:f.weight,base64:Buffer.from(f.bytes).toString('base64')}))});
+    const replacement=candidates.filter(c=>missing.includes(c.family)&&c.style==='normal');
+    for(const {el,weight} of replacement){el.style.setProperty('font-family','PPTAgainFallback','important');el.style.setProperty('font-weight',weight>=600?'700':'400','important');}
+    await document.fonts.ready;return replacement.length;
+  },{candidates:findCandidates,missing,fonts:fonts.map(f=>({weight:f.weight,base64:Buffer.from(f.bytes).toString('base64')}))});
   return applied?fonts:[];
+  }finally{await findCandidates.dispose();}
 }

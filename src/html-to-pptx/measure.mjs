@@ -14,6 +14,7 @@ import {attribute,walkHtml} from './input.mjs';
 import {scanHtmlRegions} from './html-region-scan.mjs';
 import {measurePage} from './html-object-readers.mjs';
 import {normalizeSlideSizes} from './slide-size-policy.mjs';
+import {findSlideDeck,withSlideFrame} from './html-slide-deck.mjs';
 
 export function scopeEmbeddedModelErrors(errors,slides){
   return errors.map(error=>{const match=/^slides\[(\d+)\]\./.exec(error.path),slide=match?slides[Number(match[1])]:null;return diagnostic('INPUT_INVALID',`${error.path}: ${error.message}`,slide?{slideId:slide.id}:{});});
@@ -83,7 +84,9 @@ export async function measureInput(input,runtime,options={}) {
   let session;
   try {
     session=options.session??await runtime.render(input,{viewport:options.viewport});
-    if(input.profile==='static-slides-v1')fallbackFonts=options.fallbackFonts??await applyFallbackFont(session.page,installedNativeAliases());
+    const deck=input.profile==='static-slides-v1'&&!options.validateSelection
+      ?await findSlideDeck(session.page,input.source.slideSelector??undefined):null;
+    if(input.profile==='static-slides-v1')fallbackFonts=options.fallbackFonts??await applyFallbackFont(session.page,installedNativeAliases(),deck?.frames.map(f=>f.path));
     if(input.profile==='svg-slides-v1'){
       result.environment.viewport=session.page.viewportSize();
       await measureSvgInput(input,runtime,session,result);await attachFonts();
@@ -298,9 +301,10 @@ export async function measureInput(input,runtime,options={}) {
         }
       },displays);
     }
+    const observe=async(selector,slideOffset=0)=>{
     let timer;
     const measured=await Promise.race([
-      session.page.evaluate(measurePage,{selector,profile:input.profile,timeoutMs:runtime.timeoutMs,sourceHadScripts:session.sourceHadScripts,allowTableOverlay:input.allowTableOverlay===true,nativeAliases:installedNativeAliases(),charts:input.charts??[]}),
+      session.page.evaluate(measurePage,{selector,slideOffset,profile:input.profile,timeoutMs:runtime.timeoutMs,sourceHadScripts:session.sourceHadScripts,allowTableOverlay:input.allowTableOverlay===true,nativeAliases:installedNativeAliases(),charts:input.charts??[]}),
       new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('측정 제한 시간 초과')),Math.max(15000,runtime.timeoutMs));})
     ]).finally(()=>clearTimeout(timer));
     if(measured.layoutSnapshot){
@@ -332,6 +336,29 @@ export async function measureInput(input,runtime,options={}) {
         if(svg.fonts.some(font=>!font.available))measurement.fontsReady=false;
       }
     }
+    return measured;
+    };
+    const measureDeck=async()=>{
+      const combined={slides:[],measurements:[],diagnostics:[],fonts:[]};
+      const fonts=new Map();
+      for(const frame of deck.frames){
+        const observed=await withSlideFrame(session.page,deck,frame,()=>observe(frame.selector,frame.index));
+        if(!observed){
+          combined.diagnostics.push({...diagnostic('SLIDE_ROOT_REQUIRED','숨긴 장표를 같은 위치와 크기로 열 수 없습니다.'),slideNumber:frame.index+1});
+          continue;
+        }
+        combined.slides.push(...observed.slides);
+        combined.measurements.push(...observed.measurements);
+        combined.diagnostics.push(...observed.diagnostics.map(d=>({...d,slideNumber:frame.index+1})));
+        for(const font of observed.fonts){
+          const previous=fonts.get(font.family);
+          fonts.set(font.family,previous?{...font,available:previous.available&&font.available,custom:previous.custom||font.custom}:font);
+        }
+      }
+      combined.fonts=[...fonts.values()];
+      return combined;
+    };
+    const measured=deck?await measureDeck():await observe(selector);
     result.diagnostics.push(...measured.diagnostics);result.measurements=measured.measurements;
     const mappings=identifyFontMappings(input);
     const selfLocalFamilies=[...new Set(input.fontFaces.filter(f=>f.selfLocal).map(f=>f.family))].filter(family=>input.fontFaces.filter(f=>f.family===family).every(f=>f.selfLocal));
@@ -366,22 +393,35 @@ export async function measureInput(input,runtime,options={}) {
       }
     }
     await attachFonts();
+    const captureSlideArtifacts=async(selector,slides,measurements)=>{
     if(!result.diagnostics.some(d=>d.severity==='error')) {
-      for(const slide of result.model.slides)for(const node of slide.nodes.filter(n=>n.kind==='image'&&n.content.tableBackground)){
+      for(const slide of slides)for(const node of slide.nodes.filter(n=>n.kind==='image'&&n.content.tableBackground)){
         const target=session.page.locator('[data-source-path='+JSON.stringify(node.sourceRef.path)+']');
         const originalRootStyle=await session.page.evaluate(({selector,path})=>{const el=[...document.querySelectorAll('[data-source-path]')].find(e=>e.dataset.sourcePath===path),root=[...document.querySelectorAll(selector)].find(r=>r.contains(el));if(!root)throw new Error('Table slide not found');const old=root.getAttribute('style'),marks=[],rules=[];for(const cell of el.querySelectorAll('td,th'))for(const pseudo of ['::before','::after']){const ps=getComputedStyle(cell,pseudo);let glyph='';try{glyph=JSON.parse(ps.content);}catch{}if(!/^[→←↑↓❯❮]$/u.test(glyph))continue;let mark=marks.find(m=>m.el===cell);if(!mark){mark={el:cell,old:cell.getAttribute('data-pptagain-pseudo'),id:String(marks.length)};marks.push(mark);cell.setAttribute('data-pptagain-pseudo',mark.id);}rules.push(`[data-pptagain-mask] [data-pptagain-pseudo="${mark.id}"]${pseudo}{color:${ps.color}!important;-webkit-text-fill-color:${ps.color}!important}`);}root.style.setProperty('position','fixed','important');root.style.setProperty('left','0','important');root.style.setProperty('top','0','important');root.style.setProperty('margin','0','important');el.setAttribute('data-pptagain-mask','');const style=document.createElement('style');style.setAttribute('data-pptagain-mask-style','');style.textContent='[data-pptagain-mask], [data-pptagain-mask] * { color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; }'+rules.join('');document.head.append(style);return {old,marks:marks.map(m=>({path:m.el.dataset.sourcePath,old:m.old}))};},{selector,path:node.sourceRef.path});
         let bytes;try{const clip=await target.boundingBox();if(!clip||clip.x<0||clip.y<0||clip.width<=0||clip.height<=0)throw new Error('Table outside slide');bytes=await session.page.screenshot({clip,animations:'disabled',scale:'css',omitBackground:true});}finally{await session.page.evaluate(({selector,path,state})=>{const el=[...document.querySelectorAll('[data-source-path]')].find(e=>e.dataset.sourcePath===path),root=[...document.querySelectorAll(selector)].find(r=>r.contains(el));el.removeAttribute('data-pptagain-mask');for(const m of state.marks){const cell=[...el.querySelectorAll('[data-source-path]')].find(e=>e.dataset.sourcePath===m.path);if(cell){if(m.old===null)cell.removeAttribute('data-pptagain-pseudo');else cell.setAttribute('data-pptagain-pseudo',m.old);}}document.querySelector('[data-pptagain-mask-style]')?.remove();if(state.old===null)root.removeAttribute('style');else root.setAttribute('style',state.old);},{selector,path:node.sourceRef.path,state:originalRootStyle});}
         const asset=resolveAsset('data:image/png;base64,'+bytes.toString('base64'));if(!result.model.assets.some(a=>a.id===asset.id))result.model.assets.push(asset);node.content={assetId:asset.id};
       }
-      await captureDecorations(session,result.model,result.measurements,selector);
+      await captureDecorations(session,{...result.model,slides},measurements,selector);
     }
     if(runtime.capture&&!result.diagnostics.some(d=>d.code==='SLIDE_ROOT_REQUIRED')) {
-      for(const [index,m] of result.measurements.entries()) {
+      for(const [index,m] of measurements.entries()) {
         const root=session.page.locator(selector).nth(index),bytes=await root.screenshot({animations:'disabled',scale:'css'});
         const width=bytes.readUInt32BE(16),height=bytes.readUInt32BE(20);
         result.previews.push({slideId:m.slideId,bytes:new Uint8Array(bytes),width,height});
       }
     }
+    };
+    if(deck){
+      if(!result.diagnostics.some(d=>d.code==='SLIDE_ROOT_REQUIRED')){
+        for(const frame of deck.frames){
+          const captured=await withSlideFrame(session.page,deck,frame,async()=>{
+            await captureSlideArtifacts(frame.selector,result.model.slides.slice(frame.index,frame.index+1),result.measurements.slice(frame.index,frame.index+1));
+            return true;
+          });
+          if(!captured)result.diagnostics.push({...diagnostic('RENDER_INCOMPLETE','숨긴 장표의 배치가 미리보기 검사 중 바뀌었습니다.'),slideNumber:frame.index+1});
+        }
+      }
+    }else await captureSlideArtifacts(selector,result.model.slides,result.measurements);
     if(!result.diagnostics.some(d=>d.severity==='error')&&result.model?.slides.length){
       if(!options.deferSizeNormalization)normalize();
       const validation=validateModel(result.model);

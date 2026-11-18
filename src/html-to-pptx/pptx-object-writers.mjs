@@ -61,6 +61,11 @@ export function writePptxText(node,box,{slide,pptx,source,measured,resolveTextFo
 
 export function writePptxShape(node,box,{slide,pptx,inches,paint,pointScale,inchScale}){
   const b=node.boxCssPx,st=node.style;
+  if(st.shape==='rightTriangle'){
+    slide.addShape(pptx.ShapeType.rtTriangle,{...box,flipH:st.flipH===true,flipV:st.flipV===true,
+      fill:paint(st.fill,st.opacity??1),line:paint('transparent')});
+    return;
+  }
   const stroke=paint(st.stroke,(st.strokeWidth??0)>0?(st.opacity??1)*(st.strokeOpacity??1):0),half=st.svgGeometry||stroke.transparency===100?0:(st.strokeWidth??0)/2;
   if(b.w<=half*2||b.h<=half*2)throw new Error('Border is wider than the shape');
   slide.addShape(st.shape==='ellipse'?pptx.ShapeType.ellipse:st.radius>0?pptx.ShapeType.roundRect:pptx.ShapeType.rect,{...box,x:inches(b.x+half),y:inches(b.y+half),w:inches(b.w-2*half),h:inches(b.h-2*half),rectRadius:st.shape==='ellipse'?undefined:Math.max(0,(st.radius??0)-half)*inchScale,fill:paint(st.assetId?'transparent':st.fill,(st.opacity??1)*(st.fillOpacity??1)),line:{...stroke,width:(st.strokeWidth??0)*pointScale,dashType:st.dash||st.borderStyle==='dashed'?'dash':st.borderStyle==='dotted'?'sysDot':'solid'}});

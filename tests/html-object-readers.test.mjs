@@ -8,6 +8,7 @@ import {measureInput} from '../src/html-to-pptx/measure.mjs';
 import {createBrowserRuntime} from '../src/html-to-pptx/browser-runtime.mjs';
 import {exportPptx} from '../src/html-to-pptx/export.mjs';
 import {readPptx} from '../src/html-to-pptx/read-pptx.mjs';
+import {publicDiagnostic} from '../src/html-to-pptx/public-diagnostics.mjs';
 import {exportHtml} from '../src/html-to-pptx/export-html.mjs';
 import {inspectPptxIndependently} from './inspect-pptx.mjs';
 
@@ -23,6 +24,63 @@ const slide=body=>`<section data-slide style="width:800px;height:600px;position:
 const measure=async(html,extra={})=>measureInput(await readInput({html,...extra}),runtime);
 const errors=result=>result.diagnostics.filter(d=>d.severity==='error');
 const detail=result=>JSON.stringify(result.diagnostics);
+
+test('independent CSS border sides become editable flat lines in paint order',async()=>{
+  const result=await measure(slide(`<div id="panel" style="position:absolute;left:10px;top:20px;width:120px;height:70px;box-sizing:border-box;background:#ddeeff;border-top:4px solid #123456;border-bottom:2px solid rgba(20,40,60,.5)"></div>
+    <div id="uniform" style="position:absolute;left:60px;top:18px;width:40px;height:30px;border:3px solid #010203;background:white"></div>
+    <p id="caption" style="position:absolute;left:180px;top:20px;margin:0;border-left:5px solid #445566;background:#eee;padding-left:8px">Caption</p>`));
+  assert.deepEqual(errors(result),[]);
+  const nodes=result.model.slides[0].nodes;
+  const edges=nodes.filter(n=>n.kind==='line');
+  assert.deepEqual(edges.map(n=>[n.style.strokeWidth,n.style.stroke,n.style.endpoints]),[
+    [4,'rgb(18, 52, 86)',{start:{x:10,y:22},end:{x:130,y:22}}],
+    [2,'rgba(20, 40, 60, 0.5)',{start:{x:10,y:89},end:{x:130,y:89}}],
+    [5,'rgb(68, 85, 102)',{start:{x:182.5,y:20},end:{x:182.5,y:43}}],
+  ]);
+  assert.deepEqual(nodes.map(n=>n.id),['panel',edges[0].id,edges[1].id,'uniform','caption::background',edges[2].id,'caption']);
+  assert.equal(nodes.find(n=>n.id==='uniform').style.strokeWidth,3);
+  assert.equal(nodes.find(n=>n.id==='caption').style.padding.left,13);
+  const {xml,output}=await generated(result);
+  assert.equal((xml.match(/prst="line"/g)??[]).length,3);
+  assert.match(xml,new RegExp(`<a:ln w="${Math.round(4*output.profile.pointScale*12700)}"[^>]*>`));
+  assert.match(xml,/<a:srgbClr val="14283C"><a:alpha val="50000"\/>/i);
+});
+
+test('adjacent unequal borders trim line ends and paint separate corner triangles',async()=>{
+  const result=await measure(slide('<div id="joined" style="width:120px;height:80px;box-sizing:border-box;border-top:4px solid red;border-left:8px solid blue"></div>'));
+  assert.deepEqual(errors(result),[]);
+  const nodes=result.model.slides[0].nodes;
+  assert.deepEqual(nodes.filter(n=>n.kind==='line').map(n=>n.boxCssPx),[{x:8,y:2,w:112,h:0},{x:4,y:4,w:0,h:76}]);
+  const corners=nodes.filter(n=>n.style.shape==='rightTriangle');
+  assert.deepEqual(corners.map(n=>[n.boxCssPx,n.style.fill,n.style.flipH,n.style.flipV]),[
+    [{x:0,y:0,w:8,h:4},'rgb(255, 0, 0)',true,true],
+    [{x:0,y:0,w:8,h:4},'rgb(0, 0, 255)',false,false],
+  ]);
+  const {xml}=await generated(result);
+  assert.equal((xml.match(/prst="rtTriangle"/g)??[]).length,2);
+  assert.match(xml,/<a:xfrm flipV="1" flipH="1"|<a:xfrm flipH="1" flipV="1"/);
+});
+
+test('an unsupported asymmetric border reports the failing side and keeps the other side',async()=>{
+  const result=await measure(slide('<div id="mixed" style="width:120px;height:80px;border-top:2px dashed red;border-bottom:4px solid blue"></div>'));
+  const warnings=result.diagnostics.map(d=>publicDiagnostic(d,result.model.slides));
+  assert.equal(warnings.length,1);
+  assert.equal(warnings[0].severity,'warning');
+  assert.equal(warnings[0].reasonKey,'HTML_BORDER_STYLE_UNSUPPORTED');
+  assert.match(warnings[0].message,/mixed.*위쪽.*실선/);
+  assert.deepEqual(result.model.slides[0].nodes.filter(n=>n.kind==='line').map(n=>n.id),['mixed::border-bottom']);
+  const {xml}=await generated(result);
+  assert.match(xml,/name="mixed::border-bottom"/);
+  assert.doesNotMatch(xml,/name="mixed::border-top"/);
+});
+
+test('a uniformly bordered CSS circle uses an editable ellipse with separate text',async()=>{
+  const result=await measure(slide('<div style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;background:#223344;border:1px solid #abcdef;border-radius:50%">1</div>'));
+  assert.deepEqual(errors(result),[]);
+  const {xml}=await generated(result);
+  assert.match(xml,/prst="ellipse"/);
+  assert.match(xml,/<a:t>1<\/a:t>/);
+});
 async function generated(result){
   const output=await exportPptx(result);
   assert.equal(output.status,'generated',JSON.stringify(output.diagnostics));

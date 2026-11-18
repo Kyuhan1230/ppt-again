@@ -158,6 +158,14 @@ function writeChart(ctx,output){
 function writeShape(ctx,output){
   const {node,s,b,slide,assets,usedIds,originDocument}=ctx;
   let {style,body,tag,extra}=output;
+  if(s.shape==='rightTriangle'){
+    const points=[[0,0],[0,1],[1,1]].map(([x,y])=>`${s.flipH?1-x:x},${s.flipV?1-y:y}`).join(' ');
+    const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1" preserveAspectRatio="none"><polygon points="${points}" fill="${esc(s.fill??'transparent')}"/></svg>`;
+    output.tag='img';
+    output.kind='image';
+    output.extra=` alt="" src="data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}"`;
+    return;
+  }
           style+=backgroundCss(s,assets,'backgroundImage',b)+`border:${s.strokeWidth??0}px solid ${colorWithOpacity(s.stroke??'transparent',s.strokeOpacity??1)};border-radius:${s.shape==='ellipse'?'50%':(s.radius??0)+'px'};`;
           extra=` data-geometry="${s.svgGeometry?'centerline':'css-border'}" data-shape="${s.shape==='ellipse'?'ellipse':'rect'}"`;
 
@@ -209,5 +217,5 @@ export function writeHtmlObject(node,{slide,assets,usedIds,originDocument}){
   if(complete!==undefined)return complete;
   let {style,body,tag,extra}=output;
   if(s.shadow){const sh=s.shadow;style+=`box-shadow:${number(sh.x)}px ${number(sh.y)}px ${number(sh.blur)}px rgba(${sh.r},${sh.g},${sh.b},${number(sh.alpha)});`;extra+=' data-pptx-outer-shadow=""';}
-  return `<${tag} data-source-id="${esc(node.id)}" data-kind="${node.kind}"${node.parentId?` data-parent-id="${esc(node.parentId)}"`:''}${extra} style="${esc(style)}">${tag==='img'?'':body+`</${tag}>`}`;
+  return `<${tag} data-source-id="${esc(node.id)}" data-kind="${output.kind??node.kind}"${node.parentId?` data-parent-id="${esc(node.parentId)}"`:''}${extra} style="${esc(style)}">${tag==='img'?'':body+`</${tag}>`}`;
 }
