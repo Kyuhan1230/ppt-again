@@ -7,17 +7,23 @@ import {chartText} from './charts.mjs';
 import {readEmbeddedSlideData} from './embedded-slide-data.mjs';
 import {validInlinePresetVector,recoverPresetVector} from './preset-vector.mjs';
 import {validTransition} from './transitions.mjs';
+import {validSizePolicy} from './size-policy-input.mjs';
+import {MIN_SLIDE_EMU,MAX_SLIDE_EMU} from './canvas.mjs';
 
 export const attribute = (node, name) => node.attrs?.find(a => a.name === name)?.value;
 export function* walkHtml(node) { yield node; for (const child of node.childNodes ?? []) yield* walkHtml(child); }
 const nodeText = node => (node.childNodes ?? []).filter(n=>n.nodeName==='#text').map(n=>n.value).join('');
 const location = node => ({sourceRef:{path:`${node.tagName ?? node.nodeName}@${node.sourceCodeLocation?.startOffset ?? 0}`}});
 
-export async function readInput({html, assets: provided = [], slideSelector = null, allowTableOverlay = false} = {},{allowEmbedded=true}={}) {
+export async function readInput({html, assets: provided = [], slideSelector = null, allowTableOverlay = false, sizePolicy} = {},{allowEmbedded=true}={}) {
   const original = typeof html === 'string' ? html : '';
   const input = {schemaVersion:1,profile:'static-slides-v1',source:{html:original,sha256:sha256(original),slideSelector},
     assets:[],project:null,diagnostics:[],styles:[],fontFaces:[],assetRefs:[],charts:[],allowTableOverlay:allowTableOverlay===true};
   const fail = (code,message,loc,severity) => input.diagnostics.push(diagnostic(code,message,loc,severity));
+  if(sizePolicy!==undefined){
+    if(!validSizePolicy(sizePolicy))fail('INPUT_INVALID','장표 크기 정책이 올바르지 않습니다.');
+    else input.sizePolicy={...sizePolicy};
+  }
   if (!original.trim() || Buffer.byteLength(original)>16*1024*1024) { fail('INPUT_INVALID','HTML 문자열이 없거나 16MiB를 초과합니다.'); return input; }
   if (slideSelector !== null && (typeof slideSelector!=='string'||!slideSelector.trim())) fail('INPUT_INVALID','장표 선택자는 비어 있지 않은 문자열이어야 합니다.');
   if (!Array.isArray(provided)) { fail('INPUT_INVALID','제공 자산 목록은 배열이어야 합니다.'); provided=[]; }
@@ -31,6 +37,9 @@ export async function readInput({html, assets: provided = [], slideSelector = nu
   }
   if(total>64*1024*1024) { fail('INPUT_INVALID','제공 자산의 총 크기가 64MiB를 초과합니다.'); return input; }
   if(input.diagnostics.some(d=>d.severity==='error'))return input;
+  // Keep a digest of the entire supplied asset mapping, including unreferenced
+  // entries, so a later inspection cannot reuse a stale selection silently.
+  input.source.providedAssetsHash=sha256(JSON.stringify(provided.map(a=>[assetPath(a.path),sha256(a.bytes)]).sort((a,b)=>a[0].localeCompare(b[0]))));
   const tree = parse(original,{sourceCodeLocationInfo:true}),nodes=[...walkHtml(tree)];
   if(allowEmbedded&&!slideSelector&&!nodes.some(n=>attribute(n,'data-slide')!==undefined||attribute(n,'data-slidehandoff')!==undefined)){
     const embedded=readEmbeddedSlideData(tree);
@@ -93,6 +102,7 @@ export async function readInput({html, assets: provided = [], slideSelector = nu
     const roots=nodes.filter(n=>attribute(n,'data-slide')!==undefined);
     if(!roots.length||roots.length>200)fail('INPUT_INVALID','장표는 1~200장이어야 합니다.');
     input.pptxSizeEmu={width:Number(attribute(roots[0]??{},'data-ppt-width-emu')),height:Number(attribute(roots[0]??{},'data-ppt-height-emu'))};
+    if(!Object.values(input.pptxSizeEmu).every(n=>Number.isSafeInteger(n)&&n>=MIN_SLIDE_EMU&&n<=MAX_SLIDE_EMU))fail('INPUT_INVALID','원본 PPT 장표 크기는 각 변이 1~56인치여야 합니다.');
     if(roots.some(n=>Number(attribute(n,'data-ppt-width-emu'))!==input.pptxSizeEmu.width||Number(attribute(n,'data-ppt-height-emu'))!==input.pptxSizeEmu.height))fail('INPUT_INVALID','PPT 크기 메타데이터가 장표마다 다릅니다.');
   }
   const dataNodes=nodes.filter(n=>n.tagName==='script'&&attribute(n,'id')==='project-data');

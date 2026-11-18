@@ -24,10 +24,9 @@ before(async()=>{
       scenario.cleanupCommands.push(script);
       return {stdout:''};
     }
-    assert.equal(options.timeout,5000);
     const sample=scenario.samples.shift();
     assert.ok(sample,'Unexpected process sample');
-    return {stdout:JSON.stringify(await sample())};
+    return {stdout:JSON.stringify(await sample(options.timeout))};
   };
   childProcess.fork=()=>scenario.child;
   syncBuiltinESMExports();
@@ -105,6 +104,20 @@ test('an active observation timeout cancels the conversion and cleans up verifie
   assert.match(cleanupCommands[0],/242:120/);
 });
 
+test('a delayed active census still enforces the RSS limit after validating the process tree',async()=>{
+  const delayedCensus=timeoutMs=>{
+    // Model a Windows query that takes more than five seconds, without a real wait.
+    if(timeoutMs<6500)throw timeout();
+    assert.equal(timeoutMs,8000);
+    return [worker,browser];
+  };
+  const {pending,events}=run([timeoutMs=>{assert.equal(timeoutMs,5000);return initialSample();},delayedCensus,initialSample],{
+    maxRssBytes:2200,onRun:({child})=>child.emit('message',{type:'browser',pid:browser.pid})
+  });
+  await assert.rejects(pending,{code:'JOB_MEMORY_LIMIT'});
+  assert.deepEqual(events,['run','cancel']);
+});
+
 test('a timeout during clean worker exit accepts a result only after a new census confirms exit',async()=>{
   const {pending,events,cleanupCommands}=run([()=>[worker,browser],rejectedSample(timeout),()=>[unrelated]],{
     onRun:({child,succeed})=>{child.emit('message',{type:'browser',pid:browser.pid});succeed();}
@@ -158,4 +171,50 @@ test('observed memory limits and cancellation still stop the job and clean up',a
   await assert.rejects(cancelled.pending,{code:'JOB_CANCELLED'});
   assert.deepEqual(cancelled.events,['run','cancel']);
   assert.match(cancelled.cleanupCommands[0],/241:110/);
+});
+
+test('initial census refuses a direct child whose creation time is unknown',async()=>{
+  const unknown={...browser,created:null};
+  const {pending,events}=run([()=>[worker,unknown],()=>[worker]]);
+  await expectObserverFailure(pending,'initial','OBSERVER_IDENTITY_UNAVAILABLE');
+  assert.ok(!events.includes('run'),'unverified ownership must not permit the worker to start');
+});
+
+for(const [relation,unknown] of [['direct',{pid:243,parent:worker.pid,rss:4096,created:null}],['recursive',{pid:243,parent:browser.pid,rss:4096,created:null}]])
+  test(`active census refuses unknown creation time on a ${relation} child`,async()=>{
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),500);
+    try{
+      const {pending,events,cleanupCommands}=run([()=>[worker,browser],()=>[worker,browser,unknown],()=>[worker,browser,unknown]],{
+        signal:controller.signal,onRun:({child})=>child.emit('message',{type:'browser',pid:browser.pid})
+      });
+      await expectObserverFailure(pending,'active','OBSERVER_IDENTITY_UNAVAILABLE');
+      assert.deepEqual(events,['run','cancel']);
+      assert.match(cleanupCommands[0],/241:110/);assert.match(cleanupCommands[0],/242:120/);
+      assert.doesNotMatch(cleanupCommands[0],/243:/,'an unverified PID must never become an authorized cleanup target');
+    }finally{clearTimeout(timer);}
+  });
+
+test('active census refuses an already-owned PID whose current creation time is unknown',async()=>{
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),500);
+  try{
+    const {pending,cleanupCommands}=run([()=>[worker,browser],()=>[{...worker,created:null},browser],()=>[browser]],{
+      signal:controller.signal,onRun:({child})=>child.emit('message',{type:'browser',pid:browser.pid})
+    });
+    await expectObserverFailure(pending,'active','OBSERVER_IDENTITY_UNAVAILABLE');
+    assert.match(cleanupCommands[0],/241:110/,'cleanup must retain the verified original identity');
+    assert.doesNotMatch(cleanupCommands[0],/241:null/);
+  }finally{clearTimeout(timer);}
+});
+
+test('a recycled PID or an older unrelated child does not contribute RSS or enter cleanup',async()=>{
+  for(const [first,next] of [
+    [[worker,browser],[worker,{...browser,parent:15,created:'999',rss:999999}]],
+    [[worker],[worker,{...browser,created:'109',rss:999999}]],
+  ]){
+    const {pending,cleanupCommands}=run([()=>first,()=>next],{
+      maxRssBytes:10000,onRun:({child,succeed})=>{child.emit('message',{type:'browser',pid:browser.pid});setTimeout(succeed,20);}
+    });
+    const result=await pending;assert.equal(result.status,'parsed');assert.ok(result.resourceUsage.peakRssBytes<=3072);
+    assert.deepEqual(cleanupCommands,[],'an unrelated reused or older PID must not be killed');
+  }
 });

@@ -1,12 +1,14 @@
 const messages={
   PPTX_FONT_REPLACED:'선택한 글꼴로 HTML 문구를 바꿨습니다. 글꼴 파일은 포함하지 않으며 줄바꿈과 배치가 달라질 수 있습니다.',
   PPTX_OBJECT_PLACEHOLDER:'지원하지 않는 내용을 표시 상자로 남겼습니다. 원본과 비교해 보완해 주세요.',
+  PPTX_OBJECT_SPLIT:'원래 하나였던 도형과 글자를 현재 배치대로 별도 객체로 저장합니다. 원본과 비교해 주세요.',
   SOURCE_PLACEHOLDER_PRESENT:'이 HTML에는 원본에서 변환하지 못한 객체의 표시가 있습니다. 다시 만든 PPT에는 상세 설명이 포함되지 않으므로 원본과 비교해 보완해 주세요.',
   PPTX_PREVIEW_UNAVAILABLE:'미리보기를 만들지 못했지만 읽어 낸 내용을 HTML로 내려받을 수 있습니다. 배치를 확인해 주세요.',
   PPTX_PREVIEW_LAYOUT_APPROXIMATED:'미리보기 일부 배치가 원본과 다를 수 있습니다. 원본과 비교해 주세요.',
   PPTX_GROUP_SCALE_APPROXIMATED:'배율이 적용된 그룹의 위치와 크기는 옮겼지만 글자 크기와 선 굵기, 셀 여백은 원본과 다를 수 있습니다.',
   PPTX_SHAPE_IMAGE_APPROXIMATED:'HTML에서는 SVG 도형을 편집할 수 있지만, 다시 만든 PPT에서는 그림으로 저장되어 개별 편집할 수 없습니다.',
   PPTX_IMAGE_APPEARANCE_APPROXIMATED:'사진은 보존하지만 색상·자유형 마스크·그림자 등 일부 효과가 생략되어 원본과 다를 수 있습니다.',
+  BACKGROUND_JPEG_UNVERIFIED:'JPEG 배경의 구조는 확인했지만 그림 전체를 읽을 수 있는지는 확인하지 못했습니다. 출력 화면을 확인해 주세요.',
   PPTX_IMAGE_DUOTONE_BAKED:'듀오톤 색상 효과를 그림에 적용했습니다. 효과를 별도 설정으로 편집할 수 없습니다.',
   PPTX_ANIMATION_OMITTED:'애니메이션과 화면 전환은 정적 HTML에서 재현되지 않습니다.',
   PPTX_MATH_IMAGE_FALLBACK:'수식을 그림으로 보존했으며 수식 자체는 편집할 수 없습니다. 배치가 원본과 다를 수 있습니다.',
@@ -22,6 +24,9 @@ const messages={
   CHART_DATA_MISMATCH:'차트 표시와 원자료가 일치하지 않습니다. 원자료와 차트 표시를 일치시킨 뒤 다시 저장해 주세요.',
   LIMIT_EXCEEDED:'문서의 글자나 차트 데이터가 지원 한도를 초과합니다. 내용을 나누어 변환해 주세요.',
   SLIDE_ROOT_REQUIRED:'장표 영역을 찾지 못했습니다. 크기가 정해진 장표 HTML을 사용하거나 장표 선택자를 지정해 주세요.',
+  SELECTION_REQUIRED:'장표 범위를 선택해야 합니다. 장표 영역을 확인하고 선택자를 지정해 주세요.',
+  SLIDE_CONTENT_OUTSIDE:'장표 영역 밖에 표시된 내용이 있습니다. 범위를 확인해 주세요. 스크립트로 생성되거나 숨겨진 내용은 확인하지 못합니다.',
+  SLIDE_CONTENT_UNOBSERVED:'스크립트로 생성되거나 숨겨진 내용과 일부 CSS 합성은 확인하지 못했습니다. 원본과 선택 범위를 확인해 주세요.',
   ASSET_MISSING:'필요한 이미지나 글꼴 파일을 찾지 못했습니다. HTML에서 사용하는 자산을 함께 선택해 주세요.',
   FONT_UNAVAILABLE:'사용할 수 없는 글꼴 또는 굵기가 있습니다. 해당 글꼴을 설치하거나 지원되는 글꼴로 바꿔 주세요.',
   FONT_SUBSTITUTED:'원래 글꼴을 사용할 수 없어 Pretendard로 바꿨습니다. 줄바꿈과 배치를 확인해 주세요.',
@@ -49,16 +54,20 @@ const messages={
   SCRIPT_REQUIRED:'스크립트 실행이 필요한 HTML입니다. 장표 내용이 포함된 정적 HTML로 저장해 주세요.',
   UNSUPPORTED_OBJECT:'지원하지 않는 표현이 있습니다. 해당 장표의 복잡한 효과를 제거하거나 기본 글자와 도형으로 바꿔 주세요.',
   SVG_TEXT_NOT_EDITABLE:'장표 안의 SVG 글자를 편집 가능한 글자로 읽는 기능은 아직 지원하지 않습니다. 해당 글자를 HTML 글자로 바꾼 정적 장표를 사용해 주세요.',
+  PAGINATION_UNSUPPORTED:'문서의 일부를 안전하게 나눌 수 없습니다. 이 문서는 장표 영역을 직접 지정하거나 원본에 장표 경계를 표시해 변환할 수 있습니다.',
+  PAGINATION_INVALID:'분할한 문서 범위를 확인할 수 없습니다. 문서를 다시 분석해 주세요.',
   RENDER_INCOMPLETE:'장표를 끝까지 읽지 못했습니다. 파일과 자산을 확인한 뒤 다시 시도해 주세요.',
   EXPORT_FAILED:'변환 파일을 만들지 못했습니다. 입력 파일을 확인한 뒤 다시 시도해 주세요.'
 };
 const warnings={
+  SLIDE_CONTENT_OUTSIDE:'선택한 장표 영역 밖에 표시된 내용이 있습니다. 스크립트로 생성되거나 숨겨진 내용은 확인하지 못합니다.',
   FONT_UNAVAILABLE:'일부 글꼴 굵기를 설치된 굵기에 맞춰 출력합니다. PowerPoint에서 글자와 줄바꿈을 확인해 주세요.',
   FONT_FORMAT_UNSUPPORTED:'이 글꼴은 PPT 파일에 포함되지 않습니다. 이 경고만으로 변환이 막히지는 않지만 다른 컴퓨터에서는 글꼴이나 줄바꿈이 달라질 수 있습니다.',
   UNSUPPORTED_OBJECT:'일부 효과는 그림으로 출력되어 내부 요소를 개별 수정할 수 없습니다. 다운로드한 PPT를 확인해 주세요.',
   SCRIPT_REQUIRED:'HTML에 포함된 스크립트는 실행하지 않습니다. 필요한 내용이 미리보기에 있는지 확인해 주세요.'
 };
 const knownObjectErrors=new Map([
+  ['장표 루트의 content-box에 패딩이나 테두리가 있습니다. box-sizing:border-box를 사용하거나 패딩과 테두리를 제거해 주세요.','장표 영역에 content-box와 패딩 또는 테두리가 함께 있습니다. box-sizing:border-box를 사용하거나 패딩과 테두리를 제거해 주세요.'],
   ['SVG image 객체는 아직 편집 가능한 객체로 변환할 수 없습니다.','SVG 안의 이미지를 아직 PPT 객체로 변환하지 못합니다.'],
   ['회전·개별 글자 위치·여러 줄 위치가 지정된 SVG 글자는 아직 지원하지 않습니다.','SVG의 회전되거나 글자별 위치가 지정된 텍스트를 아직 변환하지 못합니다.'],
   ['중첩 SVG의 글자·참조·효과 또는 뷰포트는 아직 보존할 수 없습니다.','겹쳐진 SVG 안의 글자 또는 효과를 아직 보존하지 못합니다.'],
@@ -69,6 +78,16 @@ const knownObjectErrors=new Map([
 // Fixed reasons plus narrowly bounded labels cross the UI boundary. Never
 // forward exception text, selectors, source paths, or an arbitrary message.
 const reasons={
+  HTML_DECLARED_SLIDE_HIDDEN:'장표 표식은 있지만 화면에서 숨겨져 있어 측정하지 못했습니다. 장표를 화면에 표시한 뒤 다시 변환해 주세요.',
+  HTML_BORDER_STYLE_UNSUPPORTED:'실선으로 그린 단색 테두리만 편집 가능한 선으로 옮길 수 있습니다.',
+  HTML_BORDER_CORNER_UNSUPPORTED:'둥근 모서리나 이웃 테두리와 만나는 모서리는 직선으로 그리면 모양이 달라집니다.',
+  HTML_BORDER_COMPOSITION_UNSUPPORTED:'이 테두리는 그림, 여러 조각, 투명도 또는 변환 효과와 함께 그려져 선으로 분리하기 어렵습니다.',
+  PAGINATION_TIMEOUT:'시간 안에 문서 전체의 배치를 확인할 수 없습니다. 문서를 작은 구간으로 나눠 다시 분석해 주세요.',
+  PAGINATION_LAYOUT_UNSUPPORTED:'숨긴 내용, 스크롤 영역, 겹침 또는 표현을 재현하기 어려운 서식이 있어 분할할 수 없습니다. 원본의 해당 배치를 정리한 뒤 다시 분석해 주세요.',
+  PAGINATION_OVERSIZE:'한 장에 들어가지 않는 객체나 겹친 요소 묶음이 있습니다. PPT 크기를 늘리거나 원본에서 해당 내용을 나눠 주세요.',
+  SIZE_ORIGINAL_ASPECT_MISMATCH:'원본 PPT 크기 정보와 모든 장표의 비율이 다릅니다. 원본 PPT에서 HTML을 다시 만들거나 출력 크기를 직접 지정해 주세요.',
+  SIZE_ORIGINAL_ASPECT_OVERRIDE:'원본 PPT 크기 정보와 모든 장표의 비율이 다릅니다. 사용자가 지정한 출력 크기에 맞추었습니다.',
+  SIZE_TARGET_OUT_OF_RANGE:'PPT 장표 크기는 각 변이 1~56인치여야 합니다. 다른 출력 크기를 선택해 주세요.',
   HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED:'PPT로 다시 저장할 때 문단 들여쓰기·간격·정렬이 일부 달라질 수 있습니다.',
   HTML_PPTX_BULLET_LAYOUT_APPROXIMATED:'브라우저와 PowerPoint의 글머리 모양·크기·위치가 다를 수 있습니다. PPT에서 확인해 주세요.',
   HTML_PPTX_SHADOW_OMITTED:'HTML에 표시된 바깥 그림자는 PPT로 다시 저장할 때 빠집니다.',
@@ -353,6 +372,13 @@ export function publicDiagnostic(item,slides=[]){
   if(item.blocking===true&&severity==='error'){result.blocking=true;result.message='변환 중단: '+result.message;}
   if(Object.hasOwn(reasons,item.reasonKey)){
     result.reasonKey=item.reasonKey;result.reason=reasons[item.reasonKey];
+    if(code==='SLIDE_ROOT_REQUIRED'&&item.reasonKey==='HTML_DECLARED_SLIDE_HIDDEN')result.message=result.reason;
+    if(code==='UNSUPPORTED_OBJECT'&&item.reasonKey.startsWith('HTML_BORDER_')&&['위','오른쪽','아래','왼쪽'].includes(item.borderSide)){
+      const name=safeLabel(item.objectName);
+      result.message=`${name?name+' 객체의 ':''}${item.borderSide}쪽 테두리를 생략했습니다. ${result.reason}`;
+    }
+    if(code==='PAGINATION_UNSUPPORTED'&&['PAGINATION_TIMEOUT','PAGINATION_LAYOUT_UNSUPPORTED','PAGINATION_OVERSIZE'].includes(item.reasonKey))result.message=result.reason;
+    if((item.reasonKey==='SIZE_ORIGINAL_ASPECT_OVERRIDE'&&item.code==='UNSUPPORTED_OBJECT'&&severity==='warning')||(['SIZE_ORIGINAL_ASPECT_MISMATCH','SIZE_TARGET_OUT_OF_RANGE'].includes(item.reasonKey)&&item.code==='INPUT_INVALID'&&severity==='error'))result.message=reasons[item.reasonKey];
     if(['HTML_PPTX_PARAGRAPH_LAYOUT_APPROXIMATED','HTML_PPTX_BULLET_LAYOUT_APPROXIMATED','HTML_PPTX_SHADOW_OMITTED','PPTX_PARAGRAPH_INDENT_APPROXIMATED','PPTX_PARAGRAPH_SPACING_APPROXIMATED','PPTX_LINE_SPACING_APPROXIMATED','PPTX_TEXT_BASELINE_APPROXIMATED','PPTX_PARAGRAPH_ALIGNMENT_APPROXIMATED','PPTX_INHERITED_SIZE_APPROXIMATED','PPTX_AUTONUM_APPROXIMATED','PPTX_TEXT_TAB_APPROXIMATED','PPTX_TEXT_HIGHLIGHT_APPROXIMATED','PPTX_TABLE_TEXT_COLOR_APPROXIMATED','PPTX_EMBEDDED_FONT_LOCAL_ONLY'].includes(item.reasonKey)&&severity==='warning')result.message=reasons[item.reasonKey];
     if(item.blocking===true&&severity==='error'){result.blocking=true;result.message='변환 중단: '+reasons[item.reasonKey];}
     if(item.objectType==='chart'&&severity==='error'&&item.reasonKey.startsWith('PPTX_CHART_')){

@@ -9,6 +9,8 @@ import {runConversion} from './job-runner.mjs';
 import {diagnostic} from './model.mjs';
 import {publicDiagnostic} from './public-diagnostics.mjs';
 import {writeErrorLog} from './error-log.mjs';
+import {validSizePolicy} from './size-policy-input.mjs';
+import {publicPaginationReport} from './pagination-report.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const json=(res,status,data)=>{if(res.destroyed)return;res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});res.end(JSON.stringify(data));};
 const pptxMime='application/vnd.openxmlformats-officedocument.presentationml.presentation';
@@ -16,7 +18,7 @@ const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=u
 const downloadName=job=>(job.fileName.replace(/[\\/]/g,'_').replace(/[\x00-\x1f\x7f<>:"|?*]/g,'_').replace(/\.(?:html?|pptx)$/i,'').slice(0,120).toWellFormed()||'slides')+(job.partialExport?'-partial':'')+'.'+(job.targetType??'pptx');
 function partialSlides(job){
   const measured=job.measured,slides=measured?.model?.slides??[],errors=(measured?.diagnostics??[]).filter(d=>d.severity==='error'),ids=new Set(slides.map(s=>s.id));
-  if(job.sourceType!=='html'||job.targetType!=='pptx'||!errors.length||errors.some(d=>!d.slideId||!ids.has(d.slideId)))return null;
+  if(job.pageMode==='paginate'||job.sourceType!=='html'||job.targetType!=='pptx'||!errors.length||errors.some(d=>!d.slideId||!ids.has(d.slideId)))return null;
   const blocked=new Set(errors.map(d=>d.slideId)),included=slides.filter(s=>!blocked.has(s.id));
   if(!included.length||included.length===slides.length)return null;
   return {included,excludedSlideNumbers:slides.flatMap((s,i)=>blocked.has(s.id)?[i+1]:[])};
@@ -35,11 +37,25 @@ async function readBody(req,limit) {
 }
 export function summarizeJob(job,{developmentReports=false}={}) {
   const sourceType=job.sourceType??'html',targetType=job.targetType??'pptx';
+  if(job.inspection&&!job.measured)return {id:job.id,fileName:job.fileName,sourceType,targetType,status:job.selecting?'analyzing':'selection-required',inspection:job.inspection,previewUrl:job.inspectionPreview?`/api/jobs/${job.id}/inspection.png`:null,exportAvailable:false,diagnostics:[],slides:[]};
   if(!job.measured)return {id:job.id,sourceType,targetType,status:'analyzing',exportAvailable:false,diagnostics:[],slides:[]};
-  const measured=job.measured,failed=measured.diagnostics.some(d=>d.severity==='error');
-  const diagnostics=job.exportResult?.diagnostics??measured.diagnostics,partial=partialSlides(job);
+  const measured=job.measured,slideCount=measured.model?.slides.length??0;
+  const pagination=job.pageMode==='paginate'?publicPaginationReport(measured.pagination,slideCount):null;
+  const analysisFailed=measured.diagnostics.some(d=>d.severity==='error');
+  const invalidPagination=job.pageMode==='paginate'&&!analysisFailed&&!pagination;
+  const failed=analysisFailed||invalidPagination;
+  const diagnostics=invalidPagination
+    ?[...measured.diagnostics,diagnostic('PAGINATION_INVALID','분할한 문서 범위를 확인할 수 없습니다.')]
+    :job.exportResult?.diagnostics??measured.diagnostics;
+  const partial=partialSlides(job);
+  const policy=measured.sizePolicy;
+  const safePolicy=policy&&policy.targetWidthEmu!==undefined&&policy.targetHeightEmu!==undefined&&validSizePolicy({mode:policy.mode,targetWidthEmu:policy.targetWidthEmu,targetHeightEmu:policy.targetHeightEmu,marginColor:policy.marginColor})&&['original','first-slide','custom'].includes(policy.source)?{
+    mode:'contain',targetWidthEmu:policy.targetWidthEmu,targetHeightEmu:policy.targetHeightEmu,marginColor:policy.marginColor,source:policy.source,...(policy.originalAspectMismatch===true?{originalAspectMismatch:true}:{}),
+    slides:(Array.isArray(policy.slides)?policy.slides:[]).map((item,i)=>({slideId:`slide-${i+1}`,...Object.fromEntries(['sourceWidth','sourceHeight','scale','physicalScale','offsetX','offsetY','offsetXEmu','offsetYEmu'].filter(key=>Number.isFinite(item?.[key])).map(key=>[key,item[key]]))}))
+  }:null;
   return {id:job.id,fileName:job.fileName,sourceType,targetType,status:failed?'failed':'analyzed',profile:job.input.profile,sourceDigest:job.input.source.sha256,
-    slideCount:measured.model?.slides.length??0,objectCount:measured.model?.slides.flatMap(s=>s.nodes).filter(n=>n.kind!=='group').length??0,
+    ...(safePolicy?{sizePolicy:safePolicy}:{}),...(!failed&&pagination?{pagination}:{}),...(measured.environment?.previewKind==='source'?{previewKind:'source'}:{}),
+    slideCount,objectCount:measured.model?.slides.flatMap(s=>s.nodes).filter(n=>n.kind!=='group').length??0,
     diagnostics:developmentReports?diagnostics:diagnostics.map(d=>publicDiagnostic(d,measured.model?.slides)),exportAvailable:!failed&&!job.exporting,partialExportAvailable:Boolean(partial&&!job.exporting),partialSlideCount:partial?.included.length??0,excludedSlideNumbers:partial?.excludedSlideNumbers??[],downloadSlideCount:job.partialExport?partial?.included.length??0:measured.model?.slides.length??0,visualQuality:'unmeasured',
     exportStatus:job.exporting?'converting':job.exportResult?.status??'pending',
     downloadUrl:job.exportResult?.status==='generated'?`/api/jobs/${job.id}/download`:null,
@@ -52,7 +68,31 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
   const serveDev=developmentReports?(await import('./dev-reports.mjs')).serveDevelopmentRoute:null;
   const summarize=job=>summarizeJob(job,{developmentReports});
   const sessions=createSessionManager();
-  const jobs=createJobStore({ttlMs:jobTtlMs,maxBytes:maxJobBytes,onDispose:async job=>{job.abortController?.abort();await job.pending?.catch(()=>{});}});
+  // Client request IDs cover the window before a job ID reaches the browser.
+  // Tombstones prevent cancellation racing ahead of the original POST.
+  const clientRequests=new Map(),requestToken=/^[a-f0-9]{32}$/;
+  const expireRequest=(key,record)=>{
+    if(clientRequests.get(key)!==record)return;
+    clientRequests.delete(key);clearTimeout(record.timer);record.controller?.abort();
+    if(record.request&&!record.request.complete)record.request.destroy();
+    if(record.jobId)void jobs.delete(record.ownerId,record.jobId).catch(()=>{});
+  };
+  const pruneRequests=()=>{const now=Date.now();for(const [key,value] of clientRequests)if(value.expiresAt<=now)expireRequest(key,value);};
+  const requestKey=(ownerId,token)=>`${ownerId}:${token}`;
+  const reserveRequest=(ownerId,token,state='pending')=>{
+    pruneRequests();const key=requestKey(ownerId,token),existing=clientRequests.get(key);
+    if(existing)return {key,record:existing,existing:true};
+    const activeCount=[...clientRequests.values()].filter(value=>value.ownerId===ownerId&&['pending','running'].includes(value.state)).length;
+    if(clientRequests.size>=4096||activeCount>=128)throw Object.assign(new Error('JOB_STORAGE_LIMIT'),{code:'JOB_STORAGE_LIMIT',statusCode:429});
+    const record={ownerId,state,controller:new AbortController(),jobId:null,request:null,expiresAt:Date.now()+jobTtlMs};
+    record.timer=setTimeout(()=>expireRequest(key,record),jobTtlMs);record.timer.unref();clientRequests.set(key,record);
+    return {key,record,existing:false};
+  };
+  const jobs=createJobStore({ttlMs:jobTtlMs,maxBytes:maxJobBytes,onDispose:async job=>{
+    job.abortController?.abort();await job.pending?.catch(()=>{});
+    const record=job.clientRequestKey&&clientRequests.get(job.clientRequestKey);
+    if(record?.jobId===job.id){record.jobId=null;record.request=null;record.controller=null;if(record.state!=='cancelled')record.state='retired';}
+  }});
   const missing=res=>json(res,404,{error:'결과가 없거나 만료됐습니다. 다시 분석해 주세요.'});
   let active=0,url;
   const server=http.createServer(async(req,res)=>{
@@ -65,6 +105,69 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
       if(req.method==='GET'&&route==='/api/session')return json(res,200,{csrfToken:sessions.bootstrap(req,res).csrfToken});
       const session=sessions.read(req),ownerId=session?.ownerId;
       if(['POST','DELETE'].includes(req.method)&&route.startsWith('/api/')&&!sessions.permitsWrite(req,session))return json(res,403,{error:'화면을 새로 연 뒤 다시 실행해 주세요.'});
+      let clientRequest=null,clientRequestKey=null;
+      if(req.method==='POST'&&(route==='/api/analyze'||route==='/api/inspect')&&req.headers['x-job-request-id']!==undefined){
+        const token=req.headers['x-job-request-id'];if(typeof token!=='string'||!requestToken.test(token))return json(res,400,{error:'올바른 요청 식별자가 필요합니다.'});
+        const reserved=reserveRequest(ownerId,token);clientRequest=reserved.record;clientRequestKey=reserved.key;
+        if(reserved.existing)return json(res,409,{code:clientRequest.state==='cancelled'?'JOB_CANCELLED':'REQUEST_ALREADY_USED',error:clientRequest.state==='cancelled'?'요청이 취소되었습니다.':'이미 사용한 요청 식별자입니다.'});
+        clientRequest.request=req;req.once('end',()=>{clientRequest.request=null;});
+        res.once('finish',()=>{if(!clientRequest.jobId&&clientRequest.state==='pending'){clientRequest.state='retired';clientRequest.controller=null;clientRequest.request=null;}});
+        res.once('close',()=>{if(!res.writableEnded&&clientRequest.state==='pending'){clientRequest.state='cancelled';clientRequest.controller?.abort();}});
+      }
+      const cancelRequest=/^\/api\/requests\/([a-f0-9]{32})$/.exec(route);
+      if(req.method==='DELETE'&&cancelRequest){
+        const reserved=reserveRequest(ownerId,cancelRequest[1],'cancelled'),record=reserved.record;record.state='cancelled';record.controller?.abort();if(!reserved.existing)record.controller=null;
+        if(record.request&&!record.request.complete)record.request.destroy();
+        if(record.jobId)await jobs.delete(ownerId,record.jobId);
+        res.writeHead(204,{'cache-control':'no-store'});return res.end();
+      }
+
+      if(req.method==='POST'&&route==='/api/inspect'){
+        if(active>=2)return json(res,429,{error:'현재 입력을 분석 중입니다. 잠시 뒤 다시 실행해 주세요.'});
+        active++;
+        try{
+          const body=await readBody(req,maxBodyBytes);
+          if(!body||typeof body!=='object'||Array.isArray(body)||typeof body.html!=='string'||body.assets!==undefined&&!Array.isArray(body.assets)||body.sizePolicy!==undefined&&!validSizePolicy(body.sizePolicy)||Object.keys(body).some(k=>!['html','assets','fileName','slideSelector','viewport','sizePolicy'].includes(k)))return json(res,400,{error:'올바른 HTML 입력과 PPT 크기 설정(각 변 1~56인치)이 필요합니다.'});
+          const assets=(body.assets??[]).map(a=>({path:a?.path,mime:a?.mime||undefined,bytes:decodeBase64(a?.base64,16*1024*1024)}));
+          const input={html:body.html,assets,slideSelector:body.slideSelector??null,allowTableOverlay:true,...(body.viewport!==undefined?{viewport:body.viewport}:{}),...(body.sizePolicy!==undefined?{sizePolicy:body.sizePolicy}:{})};
+          const abortController=clientRequest?.controller??new AbortController(),id=jobs.create(ownerId,{sourceType:'html',targetType:'pptx',fileName:typeof body.fileName==='string'?body.fileName.slice(0,200):'입력 HTML',sourceInput:input,abortController,clientRequestKey});
+          if(clientRequest){clientRequest.jobId=id;clientRequest.state='running';}
+          if(abortController.signal.aborted){await jobs.delete(ownerId,id);return json(res,409,{code:'JOB_CANCELLED',error:'요청이 취소되었습니다.'});}
+          const disconnected=()=>{if(!res.writableEnded)abortController.abort();};res.on('close',disconnected);
+          try{
+            const pending=runConversion({input,operation:'inspect-html',signal:abortController.signal,limits:conversionLimits});
+            if(!jobs.update(ownerId,id,{pending})){abortController.abort();await pending.catch(()=>{});return missing(res);}
+            const result=await pending;
+            if(abortController.signal.aborted||!jobs.update(ownerId,id,{inspection:result.inspection,inspectionPreview:result.preview,pending:null}))return missing(res);
+            const saved=jobs.get(ownerId,id);return saved?json(res,200,summarize(saved)):missing(res);
+          }catch(error){await jobs.delete(ownerId,id);throw error;}
+          finally{res.off('close',disconnected);}
+        }finally{active--;}
+      }
+      const selectRoute=/^\/api\/jobs\/([a-f0-9-]+)\/select$/.exec(route);
+      if(req.method==='POST'&&selectRoute){
+        const body=await readBody(req,4096),job=jobs.get(ownerId,selectRoute[1]);if(!job)return missing(res);
+        if(!body||typeof body.snapshotId!=='string'||typeof body.choiceId!=='string'||Object.keys(body).some(k=>!['snapshotId','choiceId'].includes(k)))return json(res,400,{error:'후보 선택 정보를 확인해 주세요.'});
+        if(!job.inspection||!job.sourceInput)return json(res,409,{error:'먼저 후보를 조사해 주세요.'});
+        if(job.selecting||job.exporting)return json(res,409,{error:'이미 선택한 영역을 분석 중입니다.'});
+        if(body.snapshotId!==job.inspection.snapshotId||!job.inspection.choices.some(c=>c.id===body.choiceId))return json(res,409,{code:'STALE_INSPECTION',error:'후보가 변경되었습니다. 다시 조사해 주세요.'});
+        const choice=job.inspection.choices.find(c=>c.id===body.choiceId);
+        if(!choice.convertible)return json(res,422,{code:'REGION_UNSUPPORTED',error:'이 범위는 아직 변환할 수 없습니다.',reasons:choice.reasons});
+        if(active>=2)return json(res,429,{error:'현재 입력을 분석 중입니다. 잠시 뒤 다시 실행해 주세요.'});
+        active++;
+        const abortController=new AbortController(),disconnected=()=>{if(!res.writableEnded)abortController.abort();};res.on('close',disconnected);
+        try{
+          if(!jobs.update(ownerId,job.id,{selecting:true,measured:null,exportResult:null,partialExport:false,abortController}))return missing(res);
+          const input={...job.sourceInput,snapshotId:body.snapshotId,choiceId:body.choiceId};
+          const pending=runConversion({input,operation:'analyze-html-selection',signal:abortController.signal,limits:conversionLimits});
+          if(!jobs.update(ownerId,job.id,{pending})){abortController.abort();await pending.catch(()=>{});return missing(res);}
+          const result=await pending;
+          if(abortController.signal.aborted||!jobs.update(ownerId,job.id,{input:result.input,measured:result.measured,resourceUsage:result.resourceUsage,selecting:false,pending:null}))return missing(res);
+          const saved=jobs.get(ownerId,job.id);if(!saved)return missing(res);
+          const summary=summarize(saved);return json(res,summary.status==='failed'?422:200,summary);
+        }catch(error){jobs.update(ownerId,job.id,{selecting:false,pending:null});throw error;}
+        finally{res.off('close',disconnected);active--;}
+      }
       if(req.method==='POST'&&route==='/api/analyze') {
         if(active>=2)return json(res,429,{error:'현재 입력을 분석 중입니다. 잠시 뒤 다시 실행해 주세요.'});
         active++;
@@ -75,18 +178,25 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
           if(!['html','pptx'].includes(sourceType))return json(res,400,{error:'HTML 또는 PPTX 파일이 필요합니다.'});
           const targetType=sourceType==='html'?'pptx':'html';let input;
           if(sourceType==='pptx'){
-            if(body.html!==undefined||body.assets!==undefined||body.slideSelector!==undefined||body.fileName!==undefined&&(typeof body.fileName!=='string'||!/\.pptx$/i.test(body.fileName)))return json(res,400,{error:'PPTX 파일 하나를 선택해 주세요.'});
+            if(body.html!==undefined||body.assets!==undefined||body.slideSelector!==undefined||body.sizePolicy!==undefined||body.viewport!==undefined||body.pageMode!==undefined||body.fileName!==undefined&&(typeof body.fileName!=='string'||!/\.pptx$/i.test(body.fileName)))return json(res,400,{error:'PPTX 파일 하나를 선택해 주세요.'});
             const options=body.pptxOptions===undefined?{}:body.pptxOptions;
             if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(k=>!['fontPolicy','allowPartial'].includes(k))||options.fontPolicy!==undefined&&!['original','malgun-gothic','pretendard'].includes(options.fontPolicy)||options.allowPartial!==undefined&&typeof options.allowPartial!=='boolean')return json(res,400,{error:'PPTX 글꼴과 부분 변환 설정을 확인해 주세요.'});
             input={bytes:decodeBase64(body.pptxBase64,64*1024*1024),options:{fontPolicy:options.fontPolicy??'original',allowPartial:options.allowPartial??false}};
           }else{
             if(body.pptxBase64!==undefined||body.pptxOptions!==undefined)return json(res,400,{error:'HTML과 PPTX를 한 번에 입력할 수 없습니다.'});
+            if(body.pageMode!==undefined&&(body.pageMode!=='paginate'||body.slideSelector!=null||
+              Object.keys(body).some(key=>!['sourceType','html','assets','fileName','slideSelector','viewport','sizePolicy','pageMode'].includes(key)))){
+              return json(res,400,{error:'문서 분할은 영역을 지정하지 않은 HTML 전체에만 적용할 수 있습니다.'});
+            }
+            if(body.sizePolicy!==undefined&&!validSizePolicy(body.sizePolicy))return json(res,400,{error:'PPT 크기는 각 변이 1~56인치여야 합니다. 크기와 여백 설정을 확인해 주세요.'});
             if(body.assets!==undefined&&!Array.isArray(body.assets))return json(res,400,{error:'자산 목록은 배열이어야 합니다.'});
             const assets=(body.assets??[]).map(a=>({path:a?.path,mime:a?.mime||undefined,bytes:decodeBase64(a?.base64,16*1024*1024)}));
-            input={html:body.html,assets,slideSelector:body.slideSelector??null,allowTableOverlay:true};
+            input={html:body.html,assets,slideSelector:body.slideSelector??null,allowTableOverlay:true,...(body.viewport!==undefined?{viewport:body.viewport}:{}),...(body.sizePolicy!==undefined?{sizePolicy:body.sizePolicy}:{}),...(body.pageMode==='paginate'?{pageMode:'paginate'}:{})};
           }
-          const abortController=new AbortController();
-          const id=jobs.create(ownerId,{direction:`${sourceType}-to-${targetType}`,sourceType,targetType,fileName:typeof body.fileName==='string'?body.fileName.slice(0,200):(sourceType==='pptx'?'입력.pptx':'입력 HTML'),input,abortController});
+          const abortController=clientRequest?.controller??new AbortController();
+          const id=jobs.create(ownerId,{direction:`${sourceType}-to-${targetType}`,sourceType,targetType,pageMode:input.pageMode,fileName:typeof body.fileName==='string'?body.fileName.slice(0,200):(sourceType==='pptx'?'입력.pptx':'입력 HTML'),input,abortController,clientRequestKey});
+          if(clientRequest){clientRequest.jobId=id;clientRequest.state='running';}
+          if(abortController.signal.aborted){await jobs.delete(ownerId,id);return json(res,409,{code:'JOB_CANCELLED',error:'요청이 취소되었습니다.'});}
           const operation=sourceType==='pptx'?'analyze-pptx':'analyze-html';
           const inputBytes=sourceType==='pptx'?input.bytes.byteLength:typeof input.html==='string'?Buffer.byteLength(input.html):undefined;
           logContext={operation,requestId,jobId:id,sourceType,targetType,inputBytes};
@@ -99,7 +209,7 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
             const saved=jobs.get(ownerId,id);if(!saved)return missing(res);
             const summary=summarize(saved),statusCode=summary.status==='failed'?422:200;
             const {diagnostics,model}=result.measured;
-            const failures=statusCode===422?diagnostics:diagnostics.filter(item=>item.code==='PPTX_PREVIEW_UNAVAILABLE');
+            const failures=statusCode===422?(diagnostics.some(item=>item.severity==='error')?diagnostics:summary.diagnostics):diagnostics.filter(item=>item.code==='PPTX_PREVIEW_UNAVAILABLE');
             if(failures.length)await errorLogger({...logContext,operation:statusCode===422?operation:'preview-pptx',statusCode,diagnostics:failures,slides:model?.slides,resourceUsage:result.resourceUsage});
             return json(res,statusCode,summary);
           }catch(error){await jobs.delete(ownerId,id);throw error;}
@@ -116,7 +226,8 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
         if(job.exporting||!job.measured)return json(res,409,{error:'이미 장표를 처리 중입니다.'});
         const partial=body.partial===true?partialSlides(job):null;
         if(body.partial!==undefined&&typeof body.partial!=='boolean'||body.partial===true&&!partial)return json(res,422,summarize(job));
-        if(!partial&&job.measured.diagnostics.some(d=>d.severity==='error'))return json(res,422,summarize(job));
+        const summary=summarize(job);
+        if(!partial&&summary.status==='failed')return json(res,422,summary);
         if(job.exportResult?.status==='generated')return json(res,200,summarize(job));
         if(active>=2)return json(res,429,{error:'다른 장표를 처리 중입니다. 잠시 뒤 다시 실행해 주세요.'});
         active++;
@@ -146,6 +257,8 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
       }
       if(req.method==='GET') {
         if(serveDev&&await serveDev({route,res,root}))return;
+        const inspectionImage=/^\/api\/jobs\/([a-f0-9-]+)\/inspection\.png$/.exec(route);
+        if(inspectionImage){const job=jobs.get(ownerId,inspectionImage[1]);if(!job?.inspectionPreview)return missing(res);res.writeHead(200,{'content-type':'image/png','cache-control':'no-store','x-content-type-options':'nosniff'});return res.end(Buffer.from(job.inspectionPreview));}
         const output=/^\/api\/jobs\/([a-f0-9-]+)\/(download|object-map)$/.exec(route);
         if(output){
           if(output[2]==='object-map'&&!developmentReports)return json(res,404,{error:'요청한 경로를 찾을 수 없습니다.'});
@@ -168,11 +281,11 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
       }
       return json(res,404,{error:'요청한 경로를 찾을 수 없습니다.'});
     }catch(e){
-      const status=[400,408,409,413,429].includes(e.statusCode)?e.statusCode:500;
+      const status=[400,408,409,413,422,429].includes(e.statusCode)?e.statusCode:500;
       await errorLogger({...logContext,statusCode:status,error:e,resourceUsage:e.resourceUsage});
-      const messages={JOB_TIMEOUT:'처리 시간을 초과해 작업을 중단했습니다. 파일을 확인한 뒤 다시 시도해 주세요.',JOB_CANCELLED:'작업을 취소했습니다.',JOB_MEMORY_LIMIT:'작업 메모리 기준을 초과해 중단했습니다.',JOB_BUSY:'다른 장표를 처리 중입니다. 잠시 뒤 다시 실행해 주세요.'};
+      const messages={JOB_TIMEOUT:'처리 시간을 초과해 작업을 중단했습니다. 파일을 확인한 뒤 다시 시도해 주세요.',JOB_CANCELLED:'작업을 취소했습니다.',JOB_MEMORY_LIMIT:'작업 메모리 기준을 초과해 중단했습니다.',JOB_BUSY:'다른 장표를 처리 중입니다. 잠시 뒤 다시 실행해 주세요.',STALE_INSPECTION:'화면 또는 후보가 달라졌습니다. 다시 조사해 주세요.',REGION_UNSUPPORTED:'이 범위는 아직 변환할 수 없습니다.'};
       const message=messages[e.code]??(status===429?'보관 가능한 작업 용량을 초과했습니다. 이전 작업을 지운 뒤 다시 시도해 주세요.':status===413?'입력 크기 제한을 초과했습니다.':status===400?'올바른 입력이 필요합니다.':'분석 중 오류가 발생했습니다. 파일을 확인한 뒤 다시 시도해 주세요.');
-      if(!res.headersSent)json(res,status,{error:message,diagnostics:[developmentReports?diagnostic('RENDER_INCOMPLETE',e.message):publicDiagnostic({code:'RENDER_INCOMPLETE'})]});else res.end();
+      if(!res.headersSent)json(res,status,{error:message,...(e.code==='STALE_INSPECTION'||e.code==='REGION_UNSUPPORTED'?{code:e.code}:{}),diagnostics:Array.isArray(e.diagnostics)&&e.diagnostics.length?e.diagnostics.map(item=>publicDiagnostic(item)):[developmentReports?diagnostic('RENDER_INCOMPLETE',e.message):publicDiagnostic({code:'RENDER_INCOMPLETE'})]});else res.end();
     }
   });
   try{
@@ -183,7 +296,7 @@ export async function createHtmlServer({port=42337,host='127.0.0.1',maxBodyBytes
   }
   url=`http://${host}:${server.address().port}`;
   let closing;
-  return {url,jobs,close:()=>closing??=(async()=>{const stopped=new Promise(resolve=>server.close(resolve));await jobs.close();server.closeAllConnections();await stopped;})()};
+  return {url,jobs,close:()=>closing??=(async()=>{const stopped=new Promise(resolve=>server.close(resolve));for(const record of clientRequests.values()){clearTimeout(record.timer);record.controller?.abort();if(record.request&&!record.request.complete)record.request.destroy();}await jobs.close();clientRequests.clear();server.closeAllConnections();await stopped;})()};
 }
 if(process.argv[1]&&pathToFileURL(path.resolve(process.argv[1])).href===import.meta.url){
   const app=await createHtmlServer({port:Number(process.env.HTML_PPT_PORT??42337),developmentReports:process.env.HTML_PPT_DEV_REPORTS==='1'});console.log(`Slidehandoff: ${app.url}`);

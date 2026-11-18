@@ -1,5 +1,8 @@
 import {readInput} from './input.mjs';
 import {measureInput} from './measure.mjs';
+import {measurePaginatedInput} from './measure-pagination.mjs';
+import {inspectInput,verifySelection} from './html-regions.mjs';
+import {measureSelectedInput} from './html-selection.mjs';
 import {exportPptx} from './export.mjs';
 import {readPptx} from './read-pptx.mjs';
 import {exportHtml} from './export-html.mjs';
@@ -8,6 +11,7 @@ import {chartText,validateChart} from './charts.mjs';
 import {sha256} from './assets.mjs';
 import {renderPowerPointChartImages} from './powerpoint-chart-images.mjs';
 import {safeError} from './error-log.mjs';
+import {publicDiagnostic} from './public-diagnostics.mjs';
 
 let runtime=null,cancelled=false,started=false,finished=false;
 const limit=condition=>{if(condition)throw Object.assign(new Error('INPUT_LIMIT'),{code:'INPUT_LIMIT'});};
@@ -24,14 +28,41 @@ function checkModel(model){
     }
   }
 }
-async function analyzeHtml(source){
+function rejectInvalidInspectionInput(input){
+  const errors=input.diagnostics.filter(d=>d.severity==='error');
+  if(errors.length)throw Object.assign(new Error('INPUT_INVALID'),{code:'INPUT_INVALID',publicDiagnostics:errors.map(d=>publicDiagnostic(d))});
+}
+async function analyzeHtml(source,selected=false){
   const input=await readInput(source);
+  if(selected)rejectInvalidInspectionInput(input);
   checkModel(input.project);
   limit(input.fontFaces.length>32||input.assets.filter(asset=>asset.mime.startsWith('font/')).reduce((n,asset)=>n+asset.bytes.length,0)>32*1024*1024);
   runtime=await createBrowserRuntime({checkLimits:true,onBrowserProcess:pid=>{if(process.connected)process.send({type:'browser',pid});}});
   if(cancelled)return null;
-  const measured=await measureInput(input,runtime);limit(runtime.limitExceeded);checkModel(measured.model);
+  let measured;
+  if (selected) {
+    measured = await measureSelectedInput(input, runtime, { viewport: source.viewport, snapshotId: source.snapshotId, choiceId: source.choiceId });
+  } else if (source.pageMode === 'paginate') {
+    measured = await measurePaginatedInput(input, runtime, { viewport: source.viewport });
+  } else {
+    measured = await measureInput(input, runtime, { viewport: source.viewport });
+  }
+  limit(runtime.limitExceeded);
+  checkModel(measured.model);
   return {input,measured};
+}
+async function inspectHtml(source,verify=false){
+  const input=await readInput(source);
+  rejectInvalidInspectionInput(input);
+  checkModel(input.project);
+  limit(input.fontFaces.length>32||input.assets.filter(asset=>asset.mime.startsWith('font/')).reduce((n,asset)=>n+asset.bytes.length,0)>32*1024*1024);
+  runtime=await createBrowserRuntime({checkLimits:true,onBrowserProcess:pid=>{if(process.connected)process.send({type:'browser',pid});}});
+  if(cancelled)return null;
+  const result=verify
+    ?{verification:await verifySelection(input,runtime,{viewport:source.viewport,snapshotId:source.snapshotId,choiceId:source.choiceId})}
+    :await (async()=>{const {preview,...inspection}=await inspectInput(input,runtime,{viewport:source.viewport,includePreview:true});return {inspection,preview};})();
+  limit(runtime.limitExceeded);
+  return result;
 }
 async function cancel(){cancelled=true;await runtime?.close().catch(()=>{});}
 process.on('disconnect',()=>{if(!finished)void cancel().finally(()=>process.exit(1));});
@@ -43,6 +74,12 @@ process.on('message',async message=>{
     if(cancelled)return;
     if(message.operation==='analyze-html'){
       result=await analyzeHtml(message.input);
+    }else if(message.operation==='analyze-html-selection'){
+      result=await analyzeHtml(message.input,true);
+    }else if(message.operation==='inspect-html'){
+      result=await inspectHtml(message.input);
+    }else if(message.operation==='verify-html-selection'){
+      result=await inspectHtml(message.input,true);
     }else if(message.operation==='analyze-pptx'){
       const bytes=message.input instanceof Uint8Array?message.input:message.input.bytes,options=message.input instanceof Uint8Array?{}:message.input.options;
       const parsed=await readPptx(bytes,options,{renderChartImages:renderPowerPointChartImages});checkModel(parsed.model);
@@ -88,7 +125,7 @@ process.on('message',async message=>{
     try{await runtime?.close();}catch(cause){error=Object.assign(new Error('JOB_CLEANUP_FAILED',{cause:error??cause}),{code:'JOB_CLEANUP_FAILED'});}
     runtime=null;finished=true;
     if(process.connected){
-      const response=error?{type:'error',code:error.code??'JOB_FAILED',error:safeError(error)}:cancelled?{type:'error',code:'JOB_CANCELLED'}:{type:'result',result};
+      const response=error?{type:'error',code:error.code??'JOB_FAILED',error:safeError(error),...(error.publicDiagnostics?{diagnostics:error.publicDiagnostics}:{})}:cancelled?{type:'error',code:'JOB_CANCELLED'}:{type:'result',result};
       process.send(response,()=>process.disconnect());
     }
   }

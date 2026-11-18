@@ -15,7 +15,8 @@ concurrency:
 jobs:
   test:
     runs-on: windows-latest
-    timeout-minutes: 20
+    # Browser and worker integration tests run serially on Windows.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,7 +26,11 @@ jobs:
       - run: npm ci
       # Each file launches browsers and worker observers; parallel files can
       # exhaust a hosted runner and trip the application's resource watchdog.
-      - run: node --test --test-concurrency=1 tests/*.test.mjs
+      - run: npm test
+        id: tests
+      - name: Report sanitized test errors
+        if: failure() && steps.tests.outcome == 'failure'
+        run: node scripts/report-ci-errors.mjs
       - name: Package verified source
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         run: git archive --format=zip --output=ppt-again-source.zip HEAD

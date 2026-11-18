@@ -36,9 +36,29 @@
             <label for="assets">이미지·글꼴 파일</label><input id="assets" type="file" multiple>
             <label for="asset-folder">또는 폴더 선택</label><input id="asset-folder" type="file" webkitdirectory multiple>
             <p class="help">HTML이 참조하는 상대 경로를 유지하세요.</p>
-            <label for="selector">장표 선택자 <span class="optional">선택</span></label>
-            <input id="selector" placeholder="예: .slide" spellcheck="false">
-            <p class="help">장표를 자동으로 찾지 못할 때만 입력하세요.</p>
+            <label for="html-page-mode">HTML 변환 범위</label>
+            <select id="html-page-mode" aria-describedby="html-pagination-help">
+              <option value="slides">장표 영역 기준 (기본)</option>
+              <option value="paginate">문서 전체를 여러 장으로 나누기</option>
+            </select>
+            <p id="html-pagination-help" class="help" hidden>크기를 지정하지 않으면 16:9로 나눕니다. 객체를 안전하게 나눌 수 없으면 변환을 멈춥니다.</p>
+            <div id="html-selector-settings" class="disclosure-content">
+              <label for="selector">장표 선택자 <span class="optional">선택</span></label>
+              <input id="selector" placeholder="예: .slide" spellcheck="false">
+              <p class="help">변환할 영역을 직접 지정할 때 입력하세요.</p>
+            </div>
+            <label for="slide-size-policy">PPT 장표 크기</label>
+            <select id="slide-size-policy">
+              <option value="auto">원본 PPT 또는 첫 장 크기 (기본)</option>
+              <option value="wide">와이드 16:9</option>
+              <option value="standard">표준 4:3</option>
+              <option value="custom">직접 지정</option>
+            </select>
+            <div id="slide-size-custom" hidden>
+              <label for="slide-width">너비 (1~56인치)</label><input id="slide-width" type="number" min="1" max="56" step="0.01" value="13.33" disabled>
+              <label for="slide-height">높이 (1~56인치)</label><input id="slide-height" type="number" min="1" max="56" step="0.01" value="7.5" disabled>
+            </div>
+            <p class="help">장표의 비율을 유지해 가운데 맞추고 남는 공간은 흰색으로 채웁니다.</p>
           </div>
         </details>
         <fieldset id="pptx-options" aria-label="PPTX 가져오기 옵션" hidden>
@@ -72,6 +92,7 @@
           <button type="button" id="cancel-button" disabled>취소</button>
           <button type="button" id="delete-button" disabled>작업 삭제</button>
         </div>
+        <p id="cleanup-note" class="important-note" role="status" hidden></p>
         <details class="inline-help retention">
           <summary>파일 보관 안내</summary>
           <p>작업은 30분 뒤 만료됩니다. 작업 삭제 시 앱에 보관된 입력과 결과가 정리됩니다.</p>
@@ -84,7 +105,21 @@
         <span id="status-badge" data-state="idle">파일 선택 대기</span>
       </div>
       <p id="duration-note" class="duration-note" role="status" aria-live="polite" hidden></p>
+      <p id="slide-size-report" class="help" role="status" hidden></p>
+      <details id="slide-size-details" class="inline-help" hidden><summary>장표별 크기와 여백 보기</summary><ul id="slide-size-list"></ul></details>
+      <p id="html-pagination-report" class="help" role="status" hidden></p>
+      <details id="html-pagination-details" class="inline-help" hidden><summary>장표별 HTML 구간 보기</summary><ol id="html-pagination-list"></ol></details>
+      <button id="region-reselect-button" class="region-reselect" type="button" hidden>다른 영역 선택</button>
       <div id="empty-preview" class="empty-preview"><div class="slide-outline" aria-hidden="true">HTML <b>↔</b> PPT</div><p>파일을 분석하면 미리보기가 표시됩니다.</p></div>
+      <section id="region-area" class="region-area" aria-labelledby="region-heading" hidden>
+        <div class="region-heading-row"><div><h3 id="region-heading">장표로 사용할 영역을 선택하세요</h3><p class="help">영역을 눌러 확인한 뒤 선택하세요. 후보는 장표로 자동 확정되지 않습니다.</p></div><span class="region-key"><i aria-hidden="true"></i>후보 영역</span></div>
+        <div id="region-map-stage" class="region-map-stage"><div id="region-map-canvas" class="region-map-canvas"><img id="region-map-image" alt="HTML 전체 미리보기"><div id="region-map-overlays" class="region-map-overlays" role="group" aria-label="미리보기의 후보 영역"></div></div></div>
+        <p id="region-preview-note" class="help" hidden></p>
+        <p id="region-summary" class="region-summary"></p>
+        <p id="region-uncertainties" class="region-uncertainties" role="note" hidden></p>
+        <div id="region-list" class="region-list" role="group" aria-label="선택 가능한 영역"></div>
+        <button id="region-select-button" type="button" disabled>선택한 영역 분석</button>
+      </section>
       <div id="preview-area" hidden>
         <div class="slide-tools"><span id="slide-count"></span><span id="object-count"></span></div>
         <div class="preview-stage"><div id="preview-image-wrap"><img id="preview-image" alt="HTML 장표 미리보기"><span id="problem-overlay" hidden aria-hidden="true"></span></div></div>
