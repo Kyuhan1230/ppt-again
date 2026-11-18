@@ -152,10 +152,11 @@ async function main(){
  }finally{process.off('SIGINT',abort);process.off('SIGTERM',abort);}
 }
 main().catch(async e=>{
-  await writeErrorLog({...logContext,error:e,diagnostics:e.diagnostics,slides:e.slides,resourceUsage:e.resourceUsage??logContext.resourceUsage});
+  const exitCode=e.exit??1;
+  await writeErrorLog({...logContext,cliExitCode:exitCode,error:e,diagnostics:e.diagnostics,slides:e.slides,resourceUsage:e.resourceUsage??logContext.resourceUsage});
   const message={STALE_INSPECTION:'입력 또는 화면이 달라졌거나 이전 선택을 확인할 수 없습니다. 후보를 다시 조사해 주세요.',REGION_UNSUPPORTED:'선택한 범위는 아직 변환할 수 없습니다.',UNSUPPORTED_SCOPE:'이 문서 범위는 아직 변환할 수 없습니다.',SELECTION_REQUIRED:'장표 후보를 확인하고 범위를 선택해 주세요.'}[e.code];
   const report={status:'failed',output:null,code:e.code??'IO_ERROR',...(message?{message}:{}),diagnostics:(e.diagnostics??[]).map(d=>publicDiagnostic(d,e.slides)),...(e.inspection?{inspection:e.inspection}:{})};
   if(process.argv.includes('--json'))console.log(JSON.stringify(report));
   else console.error(`${e.code&&e.exit?e.message:e.code==='STALE_INSPECTION'?'화면 또는 입력이 달라졌습니다. 후보를 다시 조사해 주세요.':e.code==='REGION_UNSUPPORTED'?'선택한 범위는 아직 변환할 수 없습니다. 다른 후보를 선택해 주세요.':'변환에 실패했습니다. 입력과 출력 경로를 확인해 주세요.'}${report.diagnostics.length?'\n'+report.diagnostics.map(d=>d.message).join('\n'):''}${e.inspection?'\n'+candidatesText(e.inspection):''}`);
-  process.exitCode=e.exit??1;
+  process.exitCode=exitCode;
 });

@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {once} from 'node:events';
 import {createErrorLogger} from '../src/html-to-pptx/error-log.mjs';
@@ -52,6 +53,38 @@ test('local error logs keep allowlisted metadata and omit private content',async
   assert.equal(record.diagnostics[0].slideNumber,2);
   assert.equal(record.diagnostics[0].reasonKey,'PREVIEW_UNAVAILABLE');
   assert.match(record.diagnostics[0].message,/미리보기/);
+});
+
+test('CI keeps the cause of a failed CLI inspection without an HTTP status',async t=>{
+  const directory=await tempDirectory(t),logger=createErrorLogger({directory,now});
+  const cause=Object.assign(new Error('private-command-error'),{
+    code:'OBSERVER_TIMEOUT',locations:['src/html-to-pptx/job-runner.mjs:102:77','C:/private-folder/command.mjs:5:1']
+  });
+  const error=Object.assign(new Error('private-inspection-error',{cause}),{
+    code:'JOB_OBSERVER_FAILED',observerPhase:'active'
+  });
+  await logger({operation:'inspect-html',cliExitCode:1,error,resourceUsage:{elapsedMs:12000,rssSamples:3}});
+  await logger({operation:'cli',cliExitCode:2,error:Object.assign(new Error('private-path'),{code:'USAGE'})});
+  await logger({operation:'inspect-html',cliExitCode:0});
+  const [record]=await readRecords(directory);
+  assert.equal(record.operation,'inspect-html');
+  assert.equal(record.cliExitCode,1);
+  assert.equal(record.statusCode,undefined);
+  const {readCiErrorSummaries}=await import('../scripts/report-ci-errors.mjs');
+  const dirUrl=pathToFileURL(directory+path.sep);
+  const {critical,recent}=await readCiErrorSummaries(dirUrl);
+  assert.equal(critical.length,1);
+  assert.equal(recent.length,2);
+  assert.equal(critical[0].operation,'inspect-html');
+  assert.equal(critical[0].time,now().toISOString());
+  assert.equal(critical[0].cliExitCode,1);
+  assert.equal(critical[0].statusCode,undefined);
+  assert.equal(critical[0].error.code,'JOB_OBSERVER_FAILED');
+  assert.equal(critical[0].error.observerPhase,'active');
+  assert.equal(critical[0].error.cause.code,'OBSERVER_TIMEOUT');
+  assert.deepEqual(critical[0].error.cause.locations,['src/html-to-pptx/job-runner.mjs:102:77']);
+  assert.equal(critical[0].resourceUsage.elapsedMs,12000);
+  assert.doesNotMatch(JSON.stringify({critical,recent}),/private-/);
 });
 
 test('concurrent writes stay ordered and only one bounded archive is retained',async t=>{
