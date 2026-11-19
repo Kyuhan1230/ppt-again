@@ -640,7 +640,38 @@ export async function measurePage({selector,profile,timeoutMs,sourceHadScripts,a
       if(Number(st.opacity)<1&&(el.children.length||paintedDirectText))at('UNSUPPORTED_OBJECT','글자와 배경을 함께 합성하는 투명도는 지원하지 않습니다.');
       if(st.backgroundClip==='text')at('UNSUPPORTED_OBJECT','글자 윤곽으로 자르는 배경은 지원하지 않습니다.');
       for(const pseudo of ['::before','::after']){
-        const ps=getComputedStyle(el,pseudo);if(['none','normal','""'].includes(ps.content))continue;
+        const ps=getComputedStyle(el,pseudo);
+        if(['none','normal'].includes(ps.content)||ps.display==='none')continue;
+        if(ps.content==='""'){
+          const sides=['Top','Right','Bottom','Left'];
+          const emptySolid=profile==='static-slides-v1'&&el.parentElement===root&&el.childElementCount===0&&!el.textContent.trim()&&
+            ['absolute','relative'].includes(st.position)&&st.transform==='none'&&st.overflowX==='visible'&&st.overflowY==='visible'&&st.opacity==='1'&&
+            ps.position==='absolute'&&ps.display==='block'&&ps.visibility==='visible'&&ps.opacity==='1'&&ps.zIndex==='auto'&&
+            visibleColor(ps.backgroundColor)&&ps.backgroundImage==='none'&&ps.backgroundClip==='border-box'&&
+            ps.transform==='none'&&ps.translate==='none'&&ps.rotate==='none'&&ps.scale==='none'&&ps.filter==='none'&&ps.backdropFilter==='none'&&
+            ps.clipPath==='none'&&ps.clip==='auto'&&ps.maskImage==='none'&&ps.mixBlendMode==='normal'&&ps.boxShadow==='none'&&ps.outlineStyle==='none'&&ps.borderImageSource==='none'&&
+            ps.animationName==='none'&&!ps.transitionDuration.split(',').some(v=>parseFloat(v)>0)&&
+            [ps.top,ps.left,ps.width,ps.height].every(v=>/^-?\d+(?:\.\d+)?px$/.test(v))&&
+            ['TopLeft','TopRight','BottomRight','BottomLeft'].every(side=>parseFloat(ps['border'+side+'Radius'])===0)&&
+            sides.every(side=>!parseFloat(ps['padding'+side])&&!parseFloat(ps['margin'+side])&&!parseFloat(ps['border'+side+'Width'])&&!parseFloat(st['border'+side+'Width']));
+          if(emptySolid){
+            const parent=boxOf(el),box={x:round(parent.x+parseFloat(ps.left)),y:round(parent.y+parseFloat(ps.top)),w:parseFloat(ps.width),h:parseFloat(ps.height)};
+            if(box.w>0&&box.h>0&&box.x>=0&&box.y>=0&&box.x+box.w<=width&&box.y+box.h<=height){
+              const pseudoId=nodeId+'::generated-'+pseudo.slice(2);
+              if(seen.has(pseudoId)){at('INPUT_INVALID','중복 객체 ID입니다.');continue;}
+              seen.add(pseudoId);orderKeys.set(pseudoId,domOrder.get(el)+.5);
+              nodes.push({id:pseudoId,kind:'shape',boxCssPx:box,zOrder:order++,content:{},style:{fill:ps.backgroundColor,opacity:1,cssZIndex:Number(st.zIndex)||0},sourceRef,parentId:null});
+              objects.push({nodeId:pseudoId,kind:'shape',boxCssPx:box});
+              continue;
+            }
+          }
+          if(profile==='static-slides-v1'&&el!==root&&selector!=='[data-slide]'&&ps.visibility==='visible'&&Number(ps.opacity)!==0&&
+            (visibleColor(ps.backgroundColor)||ps.backgroundImage!=='none'||ps.boxShadow!=='none'||ps.outlineStyle!=='none'||
+              sides.some(side=>parseFloat(ps['border'+side+'Width'])&&visibleColor(ps['border'+side+'Color'])))){
+            at('UNSUPPORTED_OBJECT','CSS '+pseudo+'의 생성 콘텐츠는 명시적인 HTML 요소로 넣어 주세요.');
+          }
+          continue;
+        }
         let glyph='';try{glyph=JSON.parse(ps.content);}catch{}
         if(pseudo==='::before'&&simpleListBefore(el)&&[...textOwners].some(owner=>['UL','OL'].includes(owner.tagName)&&owner.contains(el)))continue;
         const supported=!declared&&!el.closest('table')&&typeof glyph==='string'&&/^[→←↑↓❯❮]$/u.test(glyph)&&ps.position==='absolute'&&ps.display==='block'&&ps.transform==='none'&&ps.filter==='none'&&ps.clipPath==='none'&&ps.mixBlendMode==='normal'&&ps.textShadow==='none'&&Number(ps.opacity)===1&&!visibleColor(ps.backgroundColor)&&ps.backgroundImage==='none'&&['Top','Right','Bottom','Left'].every(side=>parseFloat(ps[`padding${side}`])===0&&parseFloat(ps[`border${side}Width`])===0&&parseFloat(ps[`margin${side}`])===0);

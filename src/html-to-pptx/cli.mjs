@@ -81,7 +81,9 @@ function candidatesText(inspection){
   const unavailable=choice.convertible?'':` · 후보 선택으로 변환할 수 없음: ${(choice.reasons??[]).map(item=>reason[item]??item).join(', ')||'지원하지 않는 범위'}`;
   return `${index+1}. ${choice.id} — ${why}${outside}${unavailable}${members.length?'\n   '+members.join('\n   '):''}`;
  });
- return `장표 후보 ${rows.length}개\n${rows.join('\n')}${inspection.uncertainties?.length?'\n확인 한계: '+inspection.uncertainties.map(item=>uncertainty[item]??item).join(', '):''}`;
+ const viewport=inspection.suggestedViewport;
+ const retry=viewport?`\n장표 크기로 다시 조사: --viewport ${viewport.width}x${viewport.height}`:'';
+ return `장표 후보 ${rows.length}개\n${rows.join('\n')}${inspection.uncertainties?.length?'\n확인 한계: '+inspection.uncertainties.map(item=>uncertainty[item]??item).join(', '):''}${retry}`;
 }
 async function main(){
  let values,positionals;try{({values,positionals}=parseArgs({allowPositionals:true,options:{output:{type:'string'},selector:{type:'string'},assets:{type:'string'},json:{type:'boolean'},help:{type:'boolean'},version:{type:'boolean'},'font-policy':{type:'string'},'allow-partial':{type:'boolean'},viewport:{type:'string'},inspection:{type:'string'},region:{type:'string'},scope:{type:'string'},'page-mode':{type:'string'},'slide-size':{type:'string'},'margin-color':{type:'string'}}}));}catch{throw fail('USAGE',help,2);}

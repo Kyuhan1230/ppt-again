@@ -123,6 +123,28 @@ export async function inspectInput(input,runtime,{viewport={width:1280,height:96
     else {documentChoice.convertible=true;privateChoices.set(documentChoice.id,[root.selector]);}
     choices.push(documentChoice);
     const result={snapshotId,regions,choices,uncertainties:observed.uncertainties};
+    if(input.profile==='static-slides-v1'){
+      const centered=observed.regions.filter(r=>r.centeredFrame);
+      if(centered.length===1){
+        const frame=centered[0],{x,y,width,height}=frame.bounds;
+        // Match the same source element across two viewport-specific snapshots.
+        // A frame key cannot be used to convert anything; selection still uses
+        // the newly inspected job and its validated snapshot and choice IDs.
+        const key=digest([input.source.sha256,input.source.providedAssetsHash,frame.selector]);
+        if((x<0||y<0)&&observed.uncertainties.includes('render-pixels-not-fully-observed')&&
+          validViewport({width,height})&&width*height<=8000000){
+          result.suggestedViewport={width,height};
+          result.suggestedRegionKey=key;
+        }
+        const coversViewport=b=>b.x===0&&b.y===0&&b.width===viewport.width&&b.height===viewport.height;
+        if(coversViewport(frame.bounds)&&coversViewport(bounds)){
+          const available=choices.filter(c=>c.convertible);
+          if(available.length===1&&available[0].scope==='elements'&&available[0].regionIds.length===1&&available[0].regionIds[0]===ids[frame.index]){
+            result.verifiedViewportFrame={key,choiceId:available[0].id};
+          }
+        }
+      }
+    }
     if(includePrivate)result.private={choiceSelectors:Object.fromEntries(privateChoices),fallbackFonts:fallback};
     if(includePreview)result.preview=preview;
     return result;

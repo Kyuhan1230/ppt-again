@@ -112,12 +112,17 @@
       <button id="region-reselect-button" class="region-reselect" type="button" hidden>다른 영역 선택</button>
       <div id="empty-preview" class="empty-preview"><div class="slide-outline" aria-hidden="true">HTML <b>↔</b> PPT</div><p>파일을 분석하면 미리보기가 표시됩니다.</p></div>
       <section id="region-area" class="region-area" aria-labelledby="region-heading" hidden>
-        <div class="region-heading-row"><div><h3 id="region-heading">장표로 사용할 영역을 선택하세요</h3><p class="help">영역을 눌러 확인한 뒤 선택하세요. 후보는 장표로 자동 확정되지 않습니다.</p></div><span class="region-key"><i aria-hidden="true"></i>후보 영역</span></div>
+        <div class="region-heading-row"><div><h3 id="region-heading">장표로 사용할 영역을 선택하세요</h3><p id="region-choice-help" class="help">영역을 눌러 확인한 뒤 선택하세요. 후보는 장표로 자동 확정되지 않습니다.</p></div><span id="region-map-key" class="region-key"><i aria-hidden="true"></i>후보 영역</span></div>
+        <button type="button" id="region-use-only-button" hidden></button>
+        <button type="button" id="region-fit-button" hidden></button>
         <div id="region-map-stage" class="region-map-stage"><div id="region-map-canvas" class="region-map-canvas"><img id="region-map-image" alt="HTML 전체 미리보기"><div id="region-map-overlays" class="region-map-overlays" role="group" aria-label="미리보기의 후보 영역"></div></div></div>
         <p id="region-preview-note" class="help" hidden></p>
-        <p id="region-summary" class="region-summary"></p>
-        <p id="region-uncertainties" class="region-uncertainties" role="note" hidden></p>
-        <div id="region-list" class="region-list" role="group" aria-label="선택 가능한 영역"></div>
+        <details id="region-review-details" class="region-review-details" open>
+          <summary>후보와 확인 사항</summary>
+          <p id="region-summary" class="region-summary"></p>
+          <p id="region-uncertainties" class="region-uncertainties" role="note" hidden></p>
+          <div id="region-list" class="region-list" role="group" aria-label="선택 가능한 영역"></div>
+        </details>
         <button id="region-select-button" type="button" disabled>선택한 영역 분석</button>
       </section>
       <div id="preview-area" hidden>

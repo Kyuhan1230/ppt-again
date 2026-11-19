@@ -33,6 +33,8 @@ test('candidate screen shows visual regions, hidden and offscreen explanations, 
   assert.match(await page.locator('#region-summary').innerText(),/화면 밖.*1/);
   assert.match(await page.locator('#region-uncertainties').innerText(),/숨/);
   assert.equal(await page.locator('#region-map-image').isVisible(),true);
+  assert.equal(await page.locator('#region-use-only-button').isVisible(),false);
+  assert.equal(await page.locator('#region-select-button').isVisible(),true);
   assert.ok(await page.locator('#region-map-overlays button').count()>=2);
   assert.equal(await page.locator('[data-choice-id="whole"]').isDisabled(),true);
   await page.locator('[data-choice-id="single"]').click();
@@ -51,6 +53,66 @@ test('stale selection leaves candidate view available and prevents old output do
   await page.waitForFunction(()=>document.querySelector('#status-message').textContent.includes('화면이 바뀌었습니다'));
   assert.equal(await page.locator('#region-area').isVisible(),true);assert.equal(await page.locator('#download-button').isDisabled(),true);
   assert.equal(await page.locator('#region-select-button').isEnabled(),true);
+ }finally{await context.close();}
+});
+test('a clipped document can be reinspected at the suggested screen size',async()=>{
+ const context=await browser.newContext(),page=await context.newPage(),viewports=[];let selection;
+ try{
+  await mockFlow(page,body=>{selection=body;return summary;});
+  await page.route('**/api/inspect',route=>{
+    const viewport=route.request().postDataJSON().viewport;
+    viewports.push(viewport);
+    const choices=inspection.choices.map(c=>({...c,convertible:Boolean(viewport&&c.id==='single'),reasons:viewport&&c.id==='single'?[]:['inspection-incomplete']}));
+    const scanned={...inspection,snapshotId:viewport?'fitted':'clipped',choices,...(viewport?{}:{suggestedViewport:{width:1600,height:900}})};
+    return route.fulfill({json:{id:'inspect-1',status:'selection-required',inspection:scanned,previewUrl:viewport?'/api/jobs/inspect-1/inspection.png':null}});
+  });
+  await page.goto(app.url);await upload(page);
+  const fit=page.locator('#region-fit-button');await fit.waitFor({state:'visible'});
+  assert.match(await fit.innerText(),/1600 × 900/);
+  assert.equal(await page.locator('[data-choice-id="single"]').isDisabled(),true);
+  await fit.click();
+  const useOnly=page.getByRole('button',{name:'영역 1로 분석'});
+  await useOnly.waitFor();
+  assert.deepEqual(viewports,[undefined,{width:1600,height:900}]);
+  assert.equal(await fit.isHidden(),true);
+  assert.match(await page.locator('#region-preview-note').innerText(),/1600 × 900/);
+  assert.equal(await page.locator('#region-map-overlays .region-map-outline').count(),1);
+  assert.equal(await page.locator('#region-map-overlays button').count(),0);
+  assert.equal(await page.locator('#region-select-button').isVisible(),false);
+  assert.equal(await page.locator('#region-list').isVisible(),false);
+  await page.locator('#region-review-details summary').click();
+  assert.equal(await page.locator('[data-choice-id="pair"]').isVisible(),true);
+  assert.equal(await page.locator('[data-choice-id="pair"]').isDisabled(),true);
+  assert.equal(selection,undefined);
+  await useOnly.click();
+  await page.waitForFunction(()=>document.querySelector('#status-badge').dataset.state==='analyzed');
+  assert.deepEqual(selection,{snapshotId:'fitted',choiceId:'single'});
+  assert.equal(await page.locator('#download-button').isEnabled(),true);
+ }finally{await context.close();}
+});
+for(const matches of [true,false])test((matches?'the same':'a different')+' fixed canvas is checked after the automatic viewport retry',async()=>{
+ const context=await browser.newContext(),page=await context.newPage(),viewports=[];let selected;
+ try{
+  await mockFlow(page,body=>{selected=body;return summary;});
+  await page.route('**/api/inspect',route=>{
+    const viewport=route.request().postDataJSON().viewport;
+    viewports.push(viewport);
+    const choices=inspection.choices.map(c=>({...c,convertible:Boolean(viewport&&c.id==='single')}));
+    const scanned={...inspection,choices,snapshotId:viewport?'fitted':'clipped',...(viewport?{
+      verifiedViewportFrame:{key:matches?'frame-a':'frame-b',choiceId:'single'}
+    }:{suggestedViewport:{width:1600,height:900},suggestedRegionKey:'frame-a'})};
+    return route.fulfill({json:{id:viewport?'inspect-1':'clipped-1',status:'selection-required',inspection:scanned,previewUrl:null}});
+  });
+  await page.goto(app.url);await upload(page);
+  if(matches){
+    await page.waitForFunction(()=>document.querySelector('#status-badge').dataset.state==='analyzed',null,{timeout:5000});
+    assert.deepEqual(selected,{snapshotId:'fitted',choiceId:'single'});
+  }else{
+    await page.getByRole('button',{name:'영역 1로 분석'}).waitFor({timeout:5000});
+    assert.equal(selected,undefined);
+    assert.equal(await page.locator('#download-button').isDisabled(),true);
+  }
+  assert.deepEqual(viewports,[undefined,{width:1600,height:900}]);
  }finally{await context.close();}
 });
 test('mobile candidate view fits the preview and offers the same choices by keyboard',async()=>{

@@ -19,6 +19,39 @@ export function scanHtmlRegions({selector,svgPaths=[],deckPaths=[],maxRegions=50
   for(let i=sources.length-1;i>0;i--){const parent=domIndex.get(sources[i].parentElement);if(parent!==undefined)subtreeEnd[parent]=Math.max(subtreeEnd[parent],subtreeEnd[i]);}
   const clippedRect=(r,c)=>{const left=Math.max(r.left,c.left),right=Math.min(r.right,c.right),top=Math.max(r.top,c.top),bottom=Math.min(r.bottom,c.bottom);return right>left&&bottom>top?{left,top,right,bottom}:null;};
   const transparent=color=>color==='transparent'||/^rgba\([^)]*[, /]\s*0(?:\.0+)?\s*\)$/.test(color);
+  const sides=['Top','Right','Bottom','Left'];
+  const contentBoxExpands=s=>s.boxSizing==='content-box'&&sides.some(side=>parseFloat(s['padding'+side])>0||parseFloat(s['border'+side+'Width'])>0);
+  const square=s=>['TopLeft','TopRight','BottomRight','BottomLeft'].every(side=>parseFloat(s['border'+side+'Radius'])===0);
+  const plainClip=s=>[s.overflowX,s.overflowY].every(value=>['hidden','clip','visible'].includes(value))&&s.overflowClipMargin==='0px'&&square(s);
+  const baseGradient=/(?:^|,\s*)linear-gradient\((?:[\d.]+deg, )?rgb\(\d+, \d+, \d+\)(?: [\d.]+%)?(?:, rgb\(\d+, \d+, \d+\)(?: [\d.]+%)?)+\)$/;
+  const opaqueBackground=s=>{
+    const solid=/^rgb\(/.test(s.backgroundColor);
+    const gradient=baseGradient.test(s.backgroundImage)&&s.backgroundSize.split(',').every(v=>v.trim()==='auto')&&
+      s.backgroundPosition.split(',').every(v=>v.trim()==='0% 0%')&&s.backgroundAttachment.split(',').every(v=>v.trim()==='scroll')&&
+      s.backgroundOrigin.split(',').every(v=>['padding-box','border-box'].includes(v.trim()))&&
+      sides.every(side=>parseFloat(s['border'+side+'Width'])===0);
+    return (solid||gradient)&&s.backgroundClip.split(',').every(value=>value.trim()==='border-box')&&square(s)&&s.opacity==='1'&&
+      s.filter==='none'&&s.maskImage==='none'&&s.clipPath==='none'&&s.mixBlendMode==='normal';
+  };
+  const pseudoBackground=(el,s,pseudos)=>{
+    // A positioned, clipped backdrop with all real children painted above it.
+    // Copy computed paint only, never generated text or the original subtree.
+    if(!pseudos.length||s.display!=='block'||s.position==='static'||s.transform!=='none'||!opaqueBackground(s)||
+      !plainClip(s)||!['hidden','clip'].includes(s.overflowX)||!['hidden','clip'].includes(s.overflowY)||el.scrollLeft!==0||el.scrollTop!==0||
+      [...el.childNodes].some(n=>n.nodeType===Node.TEXT_NODE&&n.data.trim())||
+      [...el.children].some(child=>{const c=getComputedStyle(child);return c.display!=='none'&&(c.display==='contents'||c.position==='static'||!(Number(c.zIndex)>0));}))return null;
+    const pixel=value=>/^-?\d+(?:\.\d+)?px$/.test(value);
+    const props=['top','left','width','height','box-sizing','background-color','border-radius',...sides.flatMap(side=>['width','style','color'].map(p=>'border-'+side.toLowerCase()+'-'+p))];
+    if(pseudos.some(([,p])=>p.content!=='""'||p.position!=='absolute'||p.display!=='block'||p.visibility!=='visible'||
+      ![p.width,p.height].every(v=>pixel(v)&&parseFloat(v)>0&&parseFloat(v)<=8192)||
+      ![p.top,p.left].every(v=>pixel(v)&&Math.abs(parseFloat(v))<=8192)||
+      p.opacity!=='1'||p.zIndex!=='auto'||p.transform!=='none'||p.translate!=='none'||p.rotate!=='none'||p.scale!=='none'||
+      p.filter!=='none'||p.backdropFilter!=='none'||p.maskImage!=='none'||p.clipPath!=='none'||p.mixBlendMode!=='normal'||
+      p.boxShadow!=='none'||p.outlineStyle!=='none'||p.borderImageSource!=='none'||p.clip!=='auto'||p.backgroundImage!=='none'||p.backgroundClip!=='border-box'||
+      p.animationName!=='none'||p.transitionDuration.split(',').some(v=>parseFloat(v)>0)||
+      sides.some(side=>parseFloat(p['padding'+side])||parseFloat(p['margin'+side])||!['none','solid'].includes(p['border'+side+'Style']))))return null;
+    return pseudos.map(([,p])=>Object.fromEntries(props.map(key=>[key,p.getPropertyValue(key)])));
+  };
   let totalText=0,textRectBudget=0;
   for(const el of sources){
     const s=getComputedStyle(el),parent=el.parentElement,ps=parent&&state.get(parent);
@@ -35,22 +68,29 @@ export function scanHtmlRegions({selector,svgPaths=[],deckPaths=[],maxRegions=50
       clipBounds={left:clips(s.overflowX)?Math.max(clipBounds.left,x):clipBounds.left,right:clips(s.overflowX)?Math.min(clipBounds.right,x+el.clientWidth*sx):clipBounds.right,top:clips(s.overflowY)?Math.max(clipBounds.top,y):clipBounds.top,bottom:clips(s.overflowY)?Math.min(clipBounds.bottom,y+el.clientHeight*sy):clipBounds.bottom};
     }
     const inSvg=Boolean(ps?.inSvg||el.localName==='svg');
-    state.set(el,{hidden,blocked,clip,clipBounds,inSvg,withinDeclared:declared.has(el)||Boolean(ps?.withinDeclared),display:s.display});
+    state.set(el,{hidden,blocked,clip,clipBounds,inSvg,withinDeclared:declared.has(el)||Boolean(ps?.withinDeclared),display:s.display,fixedDescendant:false,position:s.position});
     if(hidden)uncertainties.add('hidden-content-not-observed');
     if(clip)uncertainties.add('clipped-or-scroll-content-not-observed');
     if(s.clipPath!=='none'||s.maskImage!=='none'||s.filter!=='none'||s.mixBlendMode!=='normal'||Number(s.opacity)<1)uncertainties.add('css-compositing-not-fully-observed');
     if(s.boxShadow!=='none'||s.outlineStyle!=='none'&&parseFloat(s.outlineWidth)>0)uncertainties.add('css-compositing-not-fully-observed');
     if(s.animationName!=='none'||s.transitionDuration.split(',').some(x=>parseFloat(x)>0))uncertainties.add('layout-may-change');
-    let hasPseudo=false;for(const pseudo of ['::before','::after']){const p=getComputedStyle(el,pseudo);if(p.content!=='none'&&p.content!=='normal'&&p.display!=='none'){hasPseudo=true;uncertainties.add('generated-content-not-fully-observed');break;}}
+    const pseudos=['::before','::after'].map(name=>[name,getComputedStyle(el,name)]).filter(([,p])=>p.content!=='none'&&p.content!=='normal'&&p.display!=='none');
+    const hasPseudo=pseudos.length>0;
+    if(hasPseudo)uncertainties.add('generated-content-not-fully-observed');
+    const rootDecorations=hasPseudo?pseudoBackground(el,s,pseudos):null;
+    state.get(el).rootDecorations=rootDecorations;
     const coloredBorder=['Top','Right','Bottom','Left'].some(side=>parseFloat(s[`border${side}Width`])>0&&s[`border${side}Style`]!=='none'&&!transparent(s[`border${side}Color`]));
     const ownBackground=s.backgroundImage!=='none'||!transparent(s.backgroundColor)&&s.backgroundColor!=='rgb(255, 255, 255)';
-    const ownEffects=Number(s.opacity)<1||s.transform!=='none'||s.filter!=='none'||s.maskImage!=='none'||s.clipPath!=='none'||s.mixBlendMode!=='normal'||s.boxShadow!=='none'||s.outlineStyle!=='none'&&parseFloat(s.outlineWidth)>0||coloredBorder||hasPseudo||clips(s.overflowX)||clips(s.overflowY);
+    const ownEffects=Number(s.opacity)<1||s.transform!=='none'||s.translate!=='none'||s.rotate!=='none'||s.scale!=='none'||s.perspective!=='none'||
+      s.filter!=='none'||s.backdropFilter!=='none'||s.maskImage!=='none'||s.clipPath!=='none'||s.mixBlendMode!=='normal'||
+      s.boxShadow!=='none'||s.outlineStyle!=='none'&&parseFloat(s.outlineWidth)>0||coloredBorder||hasPseudo||
+      (clips(s.overflowX)||clips(s.overflowY))&&(!plainClip(s)||el.scrollLeft!==0||el.scrollTop!==0);
     state.get(el).ancestorEffects=Boolean(ps?.ancestorEffects||ownEffects);
     state.get(el).ancestorBackground=Boolean(ps?.ancestorBackground||ownBackground);
     const paintedBackground=s.backgroundImage!=='none'||!transparent(s.backgroundColor);
     const rounded=['borderTopLeftRadius','borderTopRightRadius','borderBottomRightRadius','borderBottomLeftRadius'].some(key=>parseFloat(s[key])!==0);
     const clippedBackground=!s.backgroundClip.split(',').every(value=>value.trim()==='border-box');
-    state.get(el).rootAppearance=Boolean(paintedBackground&&(rounded||clippedBackground)||coloredBorder||hasPseudo||Number(s.opacity)!==1||s.filter!=='none'||s.maskImage!=='none'||s.clipPath!=='none'||s.mixBlendMode!=='normal'||s.boxShadow!=='none'||s.outlineStyle!=='none'&&parseFloat(s.outlineWidth)>0);
+    state.get(el).rootAppearance=Boolean(paintedBackground&&(rounded||clippedBackground)||coloredBorder||hasPseudo&&!rootDecorations||Number(s.opacity)!==1||s.filter!=='none'||s.maskImage!=='none'||s.clipPath!=='none'||s.mixBlendMode!=='normal'||s.boxShadow!=='none'||s.outlineStyle!=='none'&&parseFloat(s.outlineWidth)>0);
     if(!hidden&&(hasPseudo||s.boxShadow!=='none'||s.outlineStyle!=='none'&&parseFloat(s.outlineWidth)>0||s.filter!=='none'||s.maskImage!=='none'||s.clipPath!=='none'||s.mixBlendMode!=='normal'))complexPaint.push(domIndex.get(el));
     if(ignored.has(el.localName)||inSvg&&el.localName!=='svg'){stats.set(el,{count:0,text:0,media:0,paint:0});continue;}
     const textVisible=!transparent(s.webkitTextFillColor)||parseFloat(s.webkitTextStrokeWidth)>0&&!transparent(s.webkitTextStrokeColor)||s.textShadow!=='none';
@@ -69,7 +109,11 @@ export function scanHtmlRegions({selector,svgPaths=[],deckPaths=[],maxRegions=50
     stats.set(el,{count:hidden?0:text+media+paint,text:hidden?0:text,media:hidden?0:media,paint:hidden?0:paint});
     if(parent){if(!children.has(parent))children.set(parent,[]);children.get(parent).push(el);}
   }
-  for(let i=sources.length-1;i>0;i--){const el=sources[i],p=el.parentElement,a=stats.get(el),b=stats.get(p);if(a&&b){b.count+=a.count;b.text+=a.text;b.media+=a.media;b.paint+=a.paint;}}
+  for(let i=sources.length-1;i>0;i--){
+    const el=sources[i],p=el.parentElement,a=stats.get(el),b=stats.get(p),child=state.get(el);
+    if(child.fixedDescendant||child.position==='fixed')state.get(p).fixedDescendant=true;
+    if(a&&b){b.count+=a.count;b.text+=a.text;b.media+=a.media;b.paint+=a.paint;}
+  }
   const selected=[];
   for(const el of all){
     if(ignored.has(el.localName)||state.get(el).inSvg&&el.localName!=='svg')continue;
@@ -112,12 +156,18 @@ export function scanHtmlRegions({selector,svgPaths=[],deckPaths=[],maxRegions=50
       }
     }
     const signature=box&&layoutComparable&&features.length<=32?JSON.stringify(features):null;
-    const ancestor=state.get(el.parentElement),opaqueBackground=/^rgb\(/.test(s.backgroundColor)&&s.backgroundClip.split(',').every(value=>value.trim()==='border-box')&&['borderTopLeftRadius','borderTopRightRadius','borderBottomRightRadius','borderBottomLeftRadius'].every(key=>parseFloat(s[key])===0)&&s.opacity==='1'&&s.filter==='none'&&s.maskImage==='none'&&s.clipPath==='none'&&s.mixBlendMode==='normal';
-    const ancestorAppearance=Boolean(ancestor?.ancestorEffects||ancestor?.ancestorBackground&&!opaqueBackground);
+    const ancestor=state.get(el.parentElement);
+    const ownClip=ancestor?.clip&&s.display==='block'&&plainClip(s)&&['hidden','clip'].includes(s.overflowX)&&['hidden','clip'].includes(s.overflowY)&&
+      s.position!=='static'&&el.scrollLeft===0&&el.scrollTop===0&&r.left>=clip.left&&r.top>=clip.top&&r.right<=clip.right&&r.bottom<=clip.bottom&&
+      !st.fixedDescendant;
+    const ancestorAppearance=Boolean(ancestor?.ancestorEffects||ancestor?.clip&&!ownClip||ancestor?.ancestorBackground&&!opaqueBackground(s));
     const specifiedWidth=el.computedStyleMap?.().get('width')?.toString(),specifiedHeight=el.computedStyleMap?.().get('height')?.toString();
     const fixed=Boolean(box&&/^\d+(?:\.\d+)?px$/.test(specifiedWidth??'')&&/^\d+(?:\.\d+)?px$/.test(specifiedHeight??'')&&s.transform==='none');
-    const rootSizeMismatch=s.boxSizing==='content-box'&&['paddingLeft','paddingRight','paddingTop','paddingBottom','borderLeftWidth','borderRightWidth','borderTopWidth','borderBottomWidth'].some(key=>parseFloat(s[key])>0);
-    return {index:i,selector:internalSelector(el),fixed,transformed:s.transform!=='none',rootSizeMismatch,ancestorAppearance,rootAppearance:st.rootAppearance,parent:parentIndex.get(el),directParent:index.has(el.parentElement),neutralWrapper:st.neutral&&(children.get(el)?.length??0)===1,bounds:box,visibility,evidence,counts:{...stat},overlaps:[],tag:el.localName,signature};
+    const rootSizeMismatch=contentBoxExpands(s);
+    const centeredFrame=fixed&&ancestor?.clip&&ancestor.position==='fixed'&&s.translate==='none'&&s.rotate==='none'&&s.scale==='none'&&
+      Math.abs(r.left+r.right-innerWidth)<.01&&Math.abs(r.top+r.bottom-innerHeight)<.01&&
+      r.width>=300&&r.height>=200&&Number.isInteger(r.width)&&Number.isInteger(r.height);
+    return {index:i,selector:internalSelector(el),fixed,centeredFrame,transformed:s.transform!=='none',rootSizeMismatch,ancestorAppearance,rootAppearance:st.rootAppearance,rootDecorations:st.rootDecorations,sourcePath:el.dataset.sourcePath,parent:parentIndex.get(el),directParent:index.has(el.parentElement),neutralWrapper:st.neutral&&(children.get(el)?.length??0)===1,bounds:box,visibility,evidence,counts:{...stat},overlaps:[],tag:el.localName,signature};
   });
   const ancestors=raw.map(r=>{const found=new Set();for(let p=r.parent;p!==null;p=raw[p].parent)found.add(p);return found;});
   const isAncestor=(a,b)=>ancestors[b].has(a);
@@ -165,8 +215,8 @@ export function scanHtmlRegions({selector,svgPaths=[],deckPaths=[],maxRegions=50
   const images=[...document.images].map(img=>[img.complete,img.naturalWidth,img.naturalHeight]);
   const fonts=[...document.fonts].map(f=>[f.family,f.style,f.weight,f.status]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
   const bodyStyle=getComputedStyle(body),bodyWidth=body.computedStyleMap?.().get('width')?.toString(),bodyHeight=body.computedStyleMap?.().get('height')?.toString(),bodyRect=body.getBoundingClientRect();
-  const documentOpaque=/^rgb\(/.test(bodyStyle.backgroundColor)&&bodyStyle.backgroundClip.split(',').every(value=>value.trim()==='border-box')&&['borderTopLeftRadius','borderTopRightRadius','borderBottomRightRadius','borderBottomLeftRadius'].every(key=>parseFloat(bodyStyle[key])===0)&&bodyStyle.opacity==='1'&&bodyStyle.filter==='none'&&bodyStyle.maskImage==='none'&&bodyStyle.clipPath==='none'&&bodyStyle.mixBlendMode==='normal';
+  const documentOpaque=opaqueBackground(bodyStyle);
   const documentAncestor=state.get(body.parentElement);
-  const documentRoot={selector:internalSelector(body),rootSizeMismatch:bodyStyle.boxSizing==='content-box'&&['paddingLeft','paddingRight','paddingTop','paddingBottom','borderLeftWidth','borderRightWidth','borderTopWidth','borderBottomWidth'].some(key=>parseFloat(bodyStyle[key])>0),fixed:/^\d+(?:\.\d+)?px$/.test(bodyWidth??'')&&/^\d+(?:\.\d+)?px$/.test(bodyHeight??'')&&bodyStyle.transform==='none',transformed:bodyStyle.transform!=='none',rootAppearance:state.get(body).rootAppearance,ancestorAppearance:Boolean(documentAncestor?.ancestorEffects||documentAncestor?.ancestorBackground&&!documentOpaque),bounds:{x:bodyRect.x+scrollX,y:bodyRect.y+scrollY,width:bodyRect.width,height:bodyRect.height}};
+  const documentRoot={selector:internalSelector(body),rootSizeMismatch:contentBoxExpands(bodyStyle),fixed:/^\d+(?:\.\d+)?px$/.test(bodyWidth??'')&&/^\d+(?:\.\d+)?px$/.test(bodyHeight??'')&&bodyStyle.transform==='none',transformed:bodyStyle.transform!=='none',rootAppearance:state.get(body).rootAppearance,ancestorAppearance:Boolean(documentAncestor?.ancestorEffects||documentAncestor?.clip||documentAncestor?.ancestorBackground&&!documentOpaque),bounds:{x:bodyRect.x+scrollX,y:bodyRect.y+scrollY,width:bodyRect.width,height:bodyRect.height}};
   return {viewport,regions:raw,groups,groupOutsideCounts,documentRoot,documentBounds:{x:minX,y:minY,width:maxX-minX,height:maxY-minY},documentCount:stats.get(body).count,uncertainties:[...uncertainties].sort(),fingerprint:{textRects,images,fonts}};
 }

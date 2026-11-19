@@ -3,6 +3,36 @@ import assert from 'node:assert/strict';
 import {runConversion} from '../src/html-to-pptx/job-runner.mjs';
 
 const source=body=>`<!doctype html><html><body style="margin:0">${body}</body></html>`;
+test('a clipped fixed canvas can be reinspected at its own size with simple decorations preserved',async()=>{
+  const html=source(`<style>
+    html,body{width:100%;height:100%;overflow:hidden;background:#001}
+    main{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
+    section{position:relative;flex:none;width:640px;height:360px;overflow:hidden;background:radial-gradient(at right, #448, transparent),linear-gradient(120deg,#123,#234)}
+    section::after{content:"";position:absolute;right:-12px;top:35px;width:90px;height:90px;border:1px solid #abc8;border-radius:50%}
+    section > *{position:absolute;z-index:1}
+    .bar{top:80px;left:20px;width:600px;height:1px;background:#ace}
+    .bar::before{content:"";position:absolute;top:-1px;left:0;width:40px;height:3px;background:#7ef}
+  </style><main><section><p>Editable canvas</p><div class="bar"></div></section></main>`);
+  const input={html,viewport:{width:480,height:300}};
+  const {inspection:clipped}=await runConversion({operation:'inspect-html',input});
+  assert.deepEqual(clipped.suggestedViewport,{width:640,height:360});
+  assert.ok(clipped.suggestedRegionKey);
+  assert.ok(clipped.uncertainties.includes('render-pixels-not-fully-observed'));
+  assert.ok(clipped.choices.every(c=>!c.convertible));
+  const fitted={...input,viewport:clipped.suggestedViewport};
+  const {inspection}=await runConversion({operation:'inspect-html',input:fitted});
+  const choice=inspection.choices.find(c=>c.scope==='elements'&&c.convertible&&c.regionIds.some(id=>inspection.regions.some(r=>r.id===id&&r.bounds.width===640&&r.bounds.height===360)));
+  assert.ok(choice,JSON.stringify(inspection.choices));
+  assert.notEqual(clipped.snapshotId,inspection.snapshotId);
+  assert.deepEqual(inspection.verifiedViewportFrame,{key:clipped.suggestedRegionKey,choiceId:choice.id});
+  const {measured}=await runConversion({operation:'analyze-html-selection',input:{...fitted,snapshotId:inspection.snapshotId,choiceId:choice.id}});
+  assert.equal(measured.diagnostics.filter(d=>d.severity==='error').length,0,JSON.stringify(measured.diagnostics));
+  assert.equal(measured.model.slides.length,1);
+  const slide=measured.model.slides[0];
+  assert.ok(slide.background.assetId);
+  assert.ok(slide.nodes.some(n=>n.kind==='text'&&n.content.text==='Editable canvas'));
+  assert.ok(slide.nodes.some(n=>n.kind==='shape'&&n.boxCssPx.w===40&&n.boxCssPx.y===79&&n.boxCssPx.h===3));
+});
 test('selected fixed-size candidate is measured in a new worker without accepting coordinates',async()=>{
   const html=source('<section style="width:400px;height:300px;background:#eee"><p>Selected page</p></section><aside>Outside page</aside>');
   const input={html,assets:[],allowTableOverlay:true};

@@ -24,6 +24,7 @@ test('slide size control sends an explicit policy, reports the applied size and 
   await page.locator('#html-file').setInputFiles({name:'slide.html',mimeType:'text/html',buffer:Buffer.from('<section data-slide style="width:800px;height:600px">Page</section>')});
   await page.waitForFunction(()=>document.querySelector('#status-badge').dataset.state==='analyzed');
   assert.deepEqual(submitted.sizePolicy,{mode:'contain',targetWidthEmu:12192000,targetHeightEmu:6858000});
+  assert.match(await page.locator('#slide-size-report').innerText(),/16:9/);
   assert.match(await page.locator('#slide-size-report').innerText(),/비율.*유지/);
   assert.match(await page.locator('#slide-size-report').innerText(),/여백/);
   assert.equal(await page.locator('#download-button').isEnabled(),true);
