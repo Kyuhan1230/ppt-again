@@ -3,6 +3,7 @@ const messages={
   PPTX_OBJECT_PLACEHOLDER:'지원하지 않는 내용을 표시 상자로 남겼습니다. 원본과 비교해 보완해 주세요.',
   PPTX_OBJECT_SPLIT:'원래 하나였던 도형과 글자를 현재 배치대로 별도 객체로 저장합니다. 원본과 비교해 주세요.',
   SOURCE_PLACEHOLDER_PRESENT:'이 HTML에는 원본에서 변환하지 못한 객체의 표시가 있습니다. 다시 만든 PPT에는 상세 설명이 포함되지 않으므로 원본과 비교해 보완해 주세요.',
+  HTML_PREVIEW_UNAVAILABLE:'장표 전체가 보이는 미리보기를 만들 수 없습니다. 다운로드한 PPT에서 배치를 확인해 주세요.',
   PPTX_PREVIEW_UNAVAILABLE:'미리보기를 만들지 못했지만 읽어 낸 내용을 HTML로 내려받을 수 있습니다. 배치를 확인해 주세요.',
   PPTX_PREVIEW_LAYOUT_APPROXIMATED:'미리보기 일부 배치가 원본과 다를 수 있습니다. 원본과 비교해 주세요.',
   PPTX_GROUP_SCALE_APPROXIMATED:'배율이 적용된 그룹의 위치와 크기는 옮겼지만 글자 크기와 선 굵기, 셀 여백은 원본과 다를 수 있습니다.',
