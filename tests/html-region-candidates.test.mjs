@@ -14,6 +14,29 @@ const card=(text,width=280,height=180,style='')=>`<section style="box-sizing:bor
 const regionAt=(result,x,y,width,height)=>result.regions.find(r=>r.bounds&&Math.abs(r.bounds.x-x)<1&&Math.abs(r.bounds.y-y)<1&&Math.abs(r.bounds.width-width)<1&&Math.abs(r.bounds.height-height)<1);
 const choiceFor=(result,ids)=>result.choices.find(c=>c.scope==='elements'&&ids.every(id=>c.regionIds.includes(id))&&c.regionIds.length===ids.length);
 
+test('the whole document size check includes a transparent top border',async()=>{
+  const html=source('<style>body{width:400px;height:300px;border-top:4px solid transparent}</style><p>Page</p>');
+  const result=await inspect(html);
+  const choice=result.choices.find(c=>c.scope==='document');
+  assert.deepEqual(choice.reasons,['root-size-mismatch']);
+});
+
+test('a newly observed frame still rejects partial ancestor clipping and unsupported paint',async()=>{
+  const html=source(`<style>
+    .stage{position:relative;overflow:hidden;background:#123;width:400px;height:200px;margin-bottom:40px}
+    .stage section{position:relative;overflow:hidden;background:#eee;width:400px;height:300px}
+    .stage.full{height:300px}
+    .overlay::after{position:absolute;top:0;left:0;content:"";width:30px;height:30px;background:blue;z-index:2}
+  </style><div class="stage"><section>Clipped</section></div>
+  <div class="stage full"><section class="overlay">Painted overlay</section></div>
+  <div class="stage full"><section style="background:linear-gradient(#0008,transparent)">Shows parent's background</section></div>`);
+  const result=await inspect(html);
+  const regions=result.regions.filter(r=>r.bounds?.width===400&&r.bounds?.height===300&&r.evidence.includes('visible-content'));
+  const reasons=regions.map(r=>choiceFor(result,[r.id])?.reasons[0]);
+  assert.ok(reasons.includes('root-appearance-not-supported'));
+  assert.ok(reasons.filter(reason=>reason==='ancestor-appearance-not-supported').length>=2);
+});
+
 test('unmarked cards are proposed individually and as a group without being silently selected',async()=>{
   const html=source(`<main style="display:flex;width:900px">${card('one',280,180)}${card('two',300,180)}${card('three',320,190)}</main>`);
   const result=await inspect(html);

@@ -53,6 +53,25 @@ test('stale selection leaves candidate view available and prevents old output do
   assert.equal(await page.locator('#region-select-button').isEnabled(),true);
  }finally{await context.close();}
 });
+test('a clipped document can be reinspected at the suggested screen size',async()=>{
+ const context=await browser.newContext(),page=await context.newPage(),viewports=[];
+ try{
+  await mockFlow(page);
+  await page.route('**/api/inspect',route=>{
+    const viewport=route.request().postDataJSON().viewport;
+    viewports.push(viewport);
+    const scanned=viewport?{...inspection,snapshotId:'fitted'}:{...inspection,suggestedViewport:{width:1600,height:900},choices:inspection.choices.map(c=>({...c,convertible:false,reasons:['inspection-incomplete']}))};
+    return route.fulfill({json:{id:'inspect-1',status:'selection-required',inspection:scanned,previewUrl:null}});
+  });
+  await page.goto(app.url);await upload(page);
+  const fit=page.locator('#region-fit-button');await fit.waitFor({state:'visible'});
+  assert.match(await fit.innerText(),/1600 × 900/);
+  assert.equal(await page.locator('[data-choice-id="single"]').isDisabled(),true);
+  await fit.click();await page.locator('[data-choice-id="single"]:enabled').waitFor();
+  assert.deepEqual(viewports,[undefined,{width:1600,height:900}]);
+  assert.equal(await fit.isHidden(),true);
+ }finally{await context.close();}
+});
 test('mobile candidate view fits the preview and offers the same choices by keyboard',async()=>{
  const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true}),page=await context.newPage();
  try{await mockFlow(page);await page.goto(app.url);await upload(page);await page.locator('#region-area').waitFor({state:'visible'});

@@ -140,6 +140,9 @@ function showRegions(job){
   const byId=new Map(regions.map(r=>[r.id,r]));
   const offscreen=regions.filter(r=>r.visibility==='offscreen').length,hidden=regions.filter(r=>r.visibility==='hidden').length;
   $('region-summary').textContent=`영역 ${regions.length}개 · 화면 밖 ${offscreen}개 · 숨김 ${hidden}개`;
+  const suggested=inspection.suggestedViewport,fitButton=$('region-fit-button');
+  fitButton.hidden=!suggested;
+  if(suggested)fitButton.textContent=`장표 크기(${suggested.width} × ${suggested.height}px)로 다시 분석`;
   const notices=(inspection.uncertainties??[]).map(code=>uncertaintyText[code]??'일부 내용이나 배치는 확인하지 못했습니다.');
   $('region-uncertainties').textContent=[...new Set(notices)].join(' ');$('region-uncertainties').hidden=!notices.length;
   const list=$('region-list'),overlays=$('region-map-overlays');list.replaceChildren();overlays.replaceChildren();
@@ -208,8 +211,8 @@ function showResult(job){
   const visible=job.slides.some(s=>s.previewUrl);$('empty-preview').querySelector('p').textContent=visible?'장표 미리보기':job.pagination&&job.exportAvailable?'PPT를 다운로드해 장표별 배치를 확인할 수 있습니다.':messages.empty;$('preview-area').hidden=!visible;$('quality-note').hidden=!visible;$('empty-preview').hidden=visible;
   if(visible){$('slide-count').textContent=`${job.slideCount}장`;$('object-count').textContent=`${targetLabel()}로 저장`;$('slide-list').replaceChildren();job.slides.forEach((s,i)=>{const b=document.createElement('button');b.type='button';b.textContent=String(i+1);b.setAttribute('aria-label',`${i+1}번 장표`);b.addEventListener('click',()=>showSlide(i));$('slide-list').append(b);});showSlide(job.slides.findIndex(s=>s.previewUrl));}
 }
-$('analyze-form').addEventListener('submit',async event=>{
-  event.preventDefault();const file=$('html-file').files[0];if(!file||$('analyze-button').disabled)return;
+async function analyzeFile(viewport){
+  const file=$('html-file').files[0];if(!file||$('analyze-button').disabled)return;
   showPagination();
   const thisRevision=++revision,previousJob=currentJob;controller?.abort();controller=new AbortController();const signal=controller.signal;selectableJobId=null;$('region-reselect-button').hidden=true;$('slide-size-report').hidden=true;$('slide-size-details').hidden=true;busy=true;jobActions();clearDownload();hideRegions();$('preview-area').hidden=true;$('quality-note').hidden=true;$('empty-preview').hidden=false;$('empty-preview').querySelector('p').textContent='입력을 분석하고 있습니다.';$('preview-image').removeAttribute('src');$('analyze-button').disabled=true;$('analyze-button').textContent='장표를 분석하고 있습니다…';status('analyzing','글꼴과 이미지를 읽고 실제 장표 배치를 확인하고 있습니다.');$('diagnostics').hidden=true;$('diagnostics').open=false;
   const noticeTimer=setTimeout(()=>{if(thisRevision===revision&&!signal.aborted&&$('duration-note').hidden){$('duration-note').textContent='장표를 분석하는 데 시간이 걸리고 있어요. 잠시만 기다려 주세요.';$('duration-note').hidden=false;}},20000);
@@ -227,7 +230,7 @@ $('analyze-form').addEventListener('submit',async event=>{
       if(thisRevision===revision&&!signal.aborted)durationNotice(embeddedPageCount(html));
       const assets=await Promise.all(files.map(async f=>({path:f.webkitRelativePath||f.name,mime:f.type,base64:base64(await f.arrayBuffer())})));
       const pagination=paginateDocument();
-      input={sourceType:'html',html,assets,fileName:file.name,sizePolicy:selectedSizePolicy(),
+      input={sourceType:'html',html,assets,fileName:file.name,sizePolicy:selectedSizePolicy(),...(viewport?{viewport}:{}),
         ...(pagination?{pageMode:'paginate'}:{slideSelector:$('selector').value.trim()||null})};
     }
     if(thisRevision!==revision||signal.aborted)return;
@@ -238,13 +241,18 @@ $('analyze-form').addEventListener('submit',async event=>{
       currentJob=job;jobActions();status('analyzing','장표로 사용할 수 있는 영역을 찾고 있습니다.');
       const removed=await apiPost(`/api/jobs/${job.id}`,undefined,signal,'DELETE');if(thisRevision!==revision||signal.aborted)return;
       if(!removed.ok&&removed.status!==404)throw new Error('이전 분석을 정리하지 못했습니다. 다시 시도해 주세요.');currentJob=null;
-      const inspectionInput={html:input.html,assets:input.assets,fileName:input.fileName,slideSelector:input.slideSelector,sizePolicy:input.sizePolicy};
+      const inspectionInput={html:input.html,assets:input.assets,fileName:input.fileName,slideSelector:input.slideSelector,sizePolicy:input.sizePolicy,...(viewport?{viewport}:{})};
       const {response:inspected,data:candidateJob}=await postJob('/api/inspect',inspectionInput,signal);if(thisRevision!==revision||signal.aborted){rememberCleanup(candidateJob);if(cleanupJobs.size||cleanupRequests.size)void cleanupOutstanding().catch(()=>{});return;}
       if(!inspected.ok||!candidateJob.id||!candidateJob.inspection)throw new Error(candidateJob.error??'장표 후보를 확인하지 못했습니다. 다시 분석해 주세요.');
       showRegions(candidateJob);
     }else showResult(job);
   }catch(error){if(error.name!=='AbortError'&&thisRevision===revision){status('failed',error.message);$('empty-preview').querySelector('p').textContent='분석을 마치지 못했습니다. 위 안내를 확인한 뒤 다시 시도해 주세요.';}}
   finally{clearTimeout(noticeTimer);if(thisRevision===revision){busy=false;jobActions();$('analyze-button').disabled=false;$('analyze-button').textContent='입력 다시 분석';}}
+}
+$('analyze-form').addEventListener('submit',event=>{event.preventDefault();void analyzeFile();});
+$('region-fit-button').addEventListener('click',()=>{
+  const viewport=currentJob?.inspection?.suggestedViewport;
+  if(viewport&&!busy)void analyzeFile(viewport);
 });
 $('region-select-button').addEventListener('click',async()=>{
   const job=currentJob,choiceId=selectedChoiceId;if(!job?.inspection||!choiceId||busy)return;

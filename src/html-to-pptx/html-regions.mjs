@@ -122,7 +122,12 @@ export async function inspectInput(input,runtime,{viewport={width:1280,height:96
     else if(!['x','y','width','height'].every(k=>Math.abs(root.bounds[k]-bounds[k])<.01))documentChoice.reasons=['document-bounds-do-not-match'];
     else {documentChoice.convertible=true;privateChoices.set(documentChoice.id,[root.selector]);}
     choices.push(documentChoice);
-    const result={snapshotId,regions,choices,uncertainties:observed.uncertainties};
+    const centeredFrames=observed.regions.filter(r=>r.centeredFrame);
+    const candidate=centeredFrames.length===1?centeredFrames[0].bounds:null;
+    const suggestedViewport=candidate&&{width:candidate.width,height:candidate.height};
+    const result={snapshotId,regions,choices,uncertainties:observed.uncertainties,
+      ...(input.profile==='static-slides-v1'&&observed.uncertainties.includes('render-pixels-not-fully-observed')&&
+        validViewport(suggestedViewport)&&candidate.width*candidate.height<=8000000?{suggestedViewport}:{})};
     if(includePrivate)result.private={choiceSelectors:Object.fromEntries(privateChoices),fallbackFonts:fallback};
     if(includePreview)result.preview=preview;
     return result;

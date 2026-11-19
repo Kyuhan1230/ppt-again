@@ -262,6 +262,7 @@ export async function measureInput(input,runtime,options={}) {
       if(observed.hidden||observed.incomplete||executableScript)result.diagnostics.push(diagnostic('SLIDE_CONTENT_UNOBSERVED','스크립트로 생성되거나 숨겨진 내용과 일부 CSS 합성은 확인하지 못했습니다. 원본과 선택 범위를 확인해 주세요.',{},'warning'));
     }
     if(selectionRequired)return result;
+    let rootDecorations={};
     if(input.profile==='static-slides-v1'&&input.source.slideSelector){
       const finalScopeSafety=await inspectExplicitSafety();
       const scopeRegions=[...initialScopeSafety.regions,...finalScopeSafety.regions];
@@ -274,6 +275,7 @@ export async function measureInput(input,runtime,options={}) {
         return result;
       }
       if(scopeRegions.some(region=>region.externalComplex)&&!result.diagnostics.some(d=>d.code==='SLIDE_CONTENT_UNOBSERVED'))result.diagnostics.push(diagnostic('SLIDE_CONTENT_UNOBSERVED','선택 영역 밖의 일부 CSS 합성이 화면에 미치는 영향을 확인하지 못했습니다.',{},'warning'));
+      rootDecorations=Object.fromEntries(finalScopeSafety.regions.filter(r=>r.rootDecorations&&r.sourcePath).map(r=>[r.sourcePath,r.rootDecorations]));
     }
     if(input.charts?.length){
       const frames=await session.page.evaluate(({selector,ids})=>{
@@ -401,7 +403,7 @@ export async function measureInput(input,runtime,options={}) {
         let bytes;try{const clip=await target.boundingBox();if(!clip||clip.x<0||clip.y<0||clip.width<=0||clip.height<=0)throw new Error('Table outside slide');bytes=await session.page.screenshot({clip,animations:'disabled',scale:'css',omitBackground:true});}finally{await session.page.evaluate(({selector,path,state})=>{const el=[...document.querySelectorAll('[data-source-path]')].find(e=>e.dataset.sourcePath===path),root=[...document.querySelectorAll(selector)].find(r=>r.contains(el));el.removeAttribute('data-pptagain-mask');for(const m of state.marks){const cell=[...el.querySelectorAll('[data-source-path]')].find(e=>e.dataset.sourcePath===m.path);if(cell){if(m.old===null)cell.removeAttribute('data-pptagain-pseudo');else cell.setAttribute('data-pptagain-pseudo',m.old);}}document.querySelector('[data-pptagain-mask-style]')?.remove();if(state.old===null)root.removeAttribute('style');else root.setAttribute('style',state.old);},{selector,path:node.sourceRef.path,state:originalRootStyle});}
         const asset=resolveAsset('data:image/png;base64,'+bytes.toString('base64'));if(!result.model.assets.some(a=>a.id===asset.id))result.model.assets.push(asset);node.content={assetId:asset.id};
       }
-      await captureDecorations(session,{...result.model,slides},measurements,selector);
+      await captureDecorations(session,{...result.model,slides},measurements,selector,rootDecorations);
     }
     if(runtime.capture&&!result.diagnostics.some(d=>d.code==='SLIDE_ROOT_REQUIRED')) {
       for(const [index,m] of measurements.entries()) {
