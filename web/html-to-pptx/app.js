@@ -47,7 +47,7 @@ function describeDirection(){
 }
 function status(state,message){document.body.dataset.phase=state;$('status-badge').dataset.state=state;$('status-badge').textContent=labels[state];$('status-message').textContent=message;}
 function clearDownload(){$('download-button').disabled=true;$('download-button').hidden=false;$('download-button').textContent=downloadLabel();$('partial-download-button').hidden=true;$('partial-download-button').disabled=true;$('partial-download-note').hidden=true;}
-function jobActions(){$('cancel-button').disabled=!busy;$('delete-button').disabled=(!currentJob&&!cleanupJobs.size&&!cleanupRequests.size)||busy;}
+function jobActions(){$('cancel-button').disabled=!busy;$('delete-button').disabled=(!currentJob&&!cleanupJobs.size&&!cleanupRequests.size)||busy;$('region-use-only-button').disabled=busy;}
 function rememberCleanup(job){if(job?.id)cleanupJobs.add(job.id);}
 function rememberRequest(){if(activeRequestId){cleanupRequests.add(activeRequestId);activeRequestId=null;}}
 function cleanupOutstanding(){
@@ -128,7 +128,7 @@ const reasonText={
 };
 const regionBox=b=>b&&[b.x,b.y,b.width,b.height].every(Number.isFinite)&&b.width>0&&b.height>0;
 function hideRegions(){$('region-area').hidden=true;$('region-map-image').removeAttribute('src');selectedChoiceId=null;}
-function showRegions(job){
+function showRegions(job,viewport={width:1280,height:960}){
   showPagination();
   currentJob=job;selectedChoiceId=null;clearDownload();durationNotice(null);jobActions();
   $('slide-size-report').hidden=true;$('slide-size-details').hidden=true;
@@ -151,6 +151,15 @@ function showRegions(job){
     for(const button of overlays.querySelectorAll('button'))button.setAttribute('aria-pressed',String(choice.regionIds.includes(button.dataset.regionId)));
     $('region-select-button').disabled=false;
   };
+  const convertible=choices.filter(choice=>choice.convertible),useOnly=$('region-use-only-button');
+  const only=convertible.length===1?convertible[0]:null;
+  useOnly.hidden=!only;
+  useOnly.onclick=null;
+  if(only){
+    const count=only.regionIds?.length??0;
+    useOnly.textContent=only.scope==='document'?'문서 전체를 한 장으로 분석':count>1?`영역 ${count}개 묶음 분석`:`${names.get(only.regionIds?.[0])??'영역'}로 분석`;
+    useOnly.onclick=()=>{selectChoice(only.id);void analyzeSelectedRegion();};
+  }
   for(const choice of choices){
     const selected=(choice.regionIds??[]).map(id=>byId.get(id)).filter(Boolean),button=document.createElement('button');
     button.type='button';button.className='region-choice';button.dataset.choiceId=choice.id;button.setAttribute('aria-pressed','false');button.disabled=!choice.convertible;
@@ -165,7 +174,7 @@ function showRegions(job){
   const doc=choices.find(c=>c.scope==='document'&&regionBox(c.bounds))?.bounds;
   const canShow=Boolean(job.previewUrl&&doc&&doc.x===0&&doc.y===0);
   $('region-map-stage').hidden=!canShow;$('region-preview-note').hidden=false;
-  $('region-preview-note').textContent=canShow?'1280 × 960 화면을 기준으로 조사한 전체 내용입니다. 화면 밖에 이미 배치된 영역도 표시합니다.':'전체 미리보기를 확인할 수 없습니다. 아래 목록에서 범위를 선택하세요.';
+  $('region-preview-note').textContent=canShow?`${viewport.width} × ${viewport.height} 화면을 기준으로 조사한 전체 내용입니다. 화면 밖에 이미 배치된 영역도 표시합니다.`:'전체 미리보기를 확인할 수 없습니다. 아래 목록에서 범위를 선택하세요.';
   const picture=$('region-map-image');if(canShow){picture.src=job.previewUrl;picture.onerror=()=>{$('region-map-stage').hidden=true;$('region-preview-note').hidden=false;$('region-preview-note').textContent='미리보기를 불러오지 못했습니다. 아래 목록에서 범위를 선택하세요.';};}else picture.removeAttribute('src');
   if(canShow)for(const [i,r]of regions.entries()){
     if(!regionBox(r.bounds)||r.bounds.x<0||r.bounds.y<0||r.bounds.x+r.bounds.width>doc.width+.01||r.bounds.y+r.bounds.height>doc.height+.01)continue;
@@ -244,7 +253,7 @@ async function analyzeFile(viewport){
       const inspectionInput={html:input.html,assets:input.assets,fileName:input.fileName,slideSelector:input.slideSelector,sizePolicy:input.sizePolicy,...(viewport?{viewport}:{})};
       const {response:inspected,data:candidateJob}=await postJob('/api/inspect',inspectionInput,signal);if(thisRevision!==revision||signal.aborted){rememberCleanup(candidateJob);if(cleanupJobs.size||cleanupRequests.size)void cleanupOutstanding().catch(()=>{});return;}
       if(!inspected.ok||!candidateJob.id||!candidateJob.inspection)throw new Error(candidateJob.error??'장표 후보를 확인하지 못했습니다. 다시 분석해 주세요.');
-      showRegions(candidateJob);
+      showRegions(candidateJob,viewport);
     }else showResult(job);
   }catch(error){if(error.name!=='AbortError'&&thisRevision===revision){status('failed',error.message);$('empty-preview').querySelector('p').textContent='분석을 마치지 못했습니다. 위 안내를 확인한 뒤 다시 시도해 주세요.';}}
   finally{clearTimeout(noticeTimer);if(thisRevision===revision){busy=false;jobActions();$('analyze-button').disabled=false;$('analyze-button').textContent='입력 다시 분석';}}
@@ -254,7 +263,7 @@ $('region-fit-button').addEventListener('click',()=>{
   const viewport=currentJob?.inspection?.suggestedViewport;
   if(viewport&&!busy)void analyzeFile(viewport);
 });
-$('region-select-button').addEventListener('click',async()=>{
+async function analyzeSelectedRegion(){
   const job=currentJob,choiceId=selectedChoiceId;if(!job?.inspection||!choiceId||busy)return;
   const thisRevision=revision;controller?.abort();controller=new AbortController();const signal=controller.signal;
   busy=true;jobActions();clearDownload();$('region-select-button').disabled=true;$('analyze-button').disabled=true;
@@ -272,7 +281,8 @@ $('region-select-button').addEventListener('click',async()=>{
     selectableJobId=result.id;showResult(result);
   }catch(error){if(error.name!=='AbortError'&&thisRevision===revision)status('selection-required',error.message);}
   finally{if(thisRevision===revision){busy=false;jobActions();$('analyze-button').disabled=false;if(currentJob?.inspection)$('region-select-button').disabled=!selectedChoiceId;}}
-});
+}
+$('region-select-button').addEventListener('click',()=>void analyzeSelectedRegion());
 $('region-reselect-button').addEventListener('click',()=>{if(!busy)$('analyze-form').requestSubmit();});
 async function download(partial=false){
   const button=$(partial?'partial-download-button':'download-button');if(!currentJob||button.disabled)return;

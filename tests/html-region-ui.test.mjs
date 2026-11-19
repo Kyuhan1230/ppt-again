@@ -33,6 +33,7 @@ test('candidate screen shows visual regions, hidden and offscreen explanations, 
   assert.match(await page.locator('#region-summary').innerText(),/화면 밖.*1/);
   assert.match(await page.locator('#region-uncertainties').innerText(),/숨/);
   assert.equal(await page.locator('#region-map-image').isVisible(),true);
+  assert.equal(await page.locator('#region-use-only-button').isVisible(),false);
   assert.ok(await page.locator('#region-map-overlays button').count()>=2);
   assert.equal(await page.locator('[data-choice-id="whole"]').isDisabled(),true);
   await page.locator('[data-choice-id="single"]').click();
@@ -54,14 +55,15 @@ test('stale selection leaves candidate view available and prevents old output do
  }finally{await context.close();}
 });
 test('a clipped document can be reinspected at the suggested screen size',async()=>{
- const context=await browser.newContext(),page=await context.newPage(),viewports=[];
+ const context=await browser.newContext(),page=await context.newPage(),viewports=[];let selection;
  try{
-  await mockFlow(page);
+  await mockFlow(page,body=>{selection=body;return summary;});
   await page.route('**/api/inspect',route=>{
     const viewport=route.request().postDataJSON().viewport;
     viewports.push(viewport);
-    const scanned=viewport?{...inspection,snapshotId:'fitted'}:{...inspection,suggestedViewport:{width:1600,height:900},choices:inspection.choices.map(c=>({...c,convertible:false,reasons:['inspection-incomplete']}))};
-    return route.fulfill({json:{id:'inspect-1',status:'selection-required',inspection:scanned,previewUrl:null}});
+    const choices=inspection.choices.map(c=>({...c,convertible:Boolean(viewport&&c.id==='single'),reasons:viewport&&c.id==='single'?[]:['inspection-incomplete']}));
+    const scanned={...inspection,snapshotId:viewport?'fitted':'clipped',choices,...(viewport?{}:{suggestedViewport:{width:1600,height:900}})};
+    return route.fulfill({json:{id:'inspect-1',status:'selection-required',inspection:scanned,previewUrl:viewport?'/api/jobs/inspect-1/inspection.png':null}});
   });
   await page.goto(app.url);await upload(page);
   const fit=page.locator('#region-fit-button');await fit.waitFor({state:'visible'});
@@ -70,6 +72,14 @@ test('a clipped document can be reinspected at the suggested screen size',async(
   await fit.click();await page.locator('[data-choice-id="single"]:enabled').waitFor();
   assert.deepEqual(viewports,[undefined,{width:1600,height:900}]);
   assert.equal(await fit.isHidden(),true);
+  assert.match(await page.locator('#region-preview-note').innerText(),/1600 × 900/);
+  const useOnly=page.getByRole('button',{name:'영역 1로 분석'});
+  assert.equal(await useOnly.isVisible(),true);
+  assert.equal(selection,undefined);
+  await useOnly.click();
+  await page.waitForFunction(()=>document.querySelector('#status-badge').dataset.state==='analyzed');
+  assert.deepEqual(selection,{snapshotId:'fitted',choiceId:'single'});
+  assert.equal(await page.locator('#download-button').isEnabled(),true);
  }finally{await context.close();}
 });
 test('mobile candidate view fits the preview and offers the same choices by keyboard',async()=>{
