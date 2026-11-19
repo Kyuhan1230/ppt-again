@@ -153,6 +153,13 @@ function showRegions(job,viewport={width:1280,height:960}){
   };
   const convertible=choices.filter(choice=>choice.convertible),useOnly=$('region-use-only-button');
   const only=convertible.length===1?convertible[0]:null;
+  $('region-heading').textContent=only?'변환할 수 있는 영역이 1개 있습니다.':'장표로 사용할 영역을 선택하세요';
+  $('region-choice-help').hidden=Boolean(only);
+  $('region-map-key').hidden=Boolean(only);
+  const review=$('region-review-details');
+  review.open=!only;
+  review.querySelector('summary').textContent=only?'다른 후보와 확인 사항':'후보와 확인 사항';
+  $('region-select-button').hidden=Boolean(only);
   useOnly.hidden=!only;
   useOnly.onclick=null;
   if(only){
@@ -161,6 +168,7 @@ function showRegions(job,viewport={width:1280,height:960}){
     useOnly.onclick=()=>{selectChoice(only.id);void analyzeSelectedRegion();};
   }
   for(const choice of choices){
+    if(choice===only)continue;
     const selected=(choice.regionIds??[]).map(id=>byId.get(id)).filter(Boolean),button=document.createElement('button');
     button.type='button';button.className='region-choice';button.dataset.choiceId=choice.id;button.setAttribute('aria-pressed','false');button.disabled=!choice.convertible;
     const title=document.createElement('strong');title.textContent=choice.scope==='document'?'문서 전체를 한 장으로 만들기':selected.length>1?`묶음 · ${selected.length}개 영역`:names.get(choice.regionIds?.[0])??'영역';button.append(title);
@@ -178,10 +186,18 @@ function showRegions(job,viewport={width:1280,height:960}){
   const picture=$('region-map-image');if(canShow){picture.src=job.previewUrl;picture.onerror=()=>{$('region-map-stage').hidden=true;$('region-preview-note').hidden=false;$('region-preview-note').textContent='미리보기를 불러오지 못했습니다. 아래 목록에서 범위를 선택하세요.';};}else picture.removeAttribute('src');
   if(canShow)for(const [i,r]of regions.entries()){
     if(!regionBox(r.bounds)||r.bounds.x<0||r.bounds.y<0||r.bounds.x+r.bounds.width>doc.width+.01||r.bounds.y+r.bounds.height>doc.height+.01)continue;
+    if(only&&!only.regionIds?.includes(r.id))continue;
+    const overlay=document.createElement(only?'div':'button');
+    Object.assign(overlay.style,{left:`${r.bounds.x/doc.width*100}%`,top:`${r.bounds.y/doc.height*100}%`,width:`${r.bounds.width/doc.width*100}%`,height:`${r.bounds.height/doc.height*100}%`});
+    if(only){
+      overlay.className='region-map-outline';
+      overlay.setAttribute('aria-hidden','true');
+      overlays.append(overlay);
+      continue;
+    }
     const choice=choices.find(c=>c.scope==='elements'&&c.regionIds?.length===1&&c.regionIds[0]===r.id)??choices.find(c=>c.scope==='elements'&&c.regionIds?.includes(r.id));
-    const button=document.createElement('button');button.type='button';button.dataset.regionId=r.id;button.disabled=!choice?.convertible;button.setAttribute('aria-label',`${names.get(r.id)} 선택`);button.setAttribute('aria-pressed','false');
-    Object.assign(button.style,{left:`${r.bounds.x/doc.width*100}%`,top:`${r.bounds.y/doc.height*100}%`,width:`${r.bounds.width/doc.width*100}%`,height:`${r.bounds.height/doc.height*100}%`});
-    const number=document.createElement('span');number.textContent=String(i+1);button.append(number);button.addEventListener('click',()=>selectChoice(choice?.id));overlays.append(button);
+    overlay.type='button';overlay.dataset.regionId=r.id;overlay.disabled=!choice?.convertible;overlay.setAttribute('aria-label',`${names.get(r.id)} 선택`);overlay.setAttribute('aria-pressed','false');
+    const number=document.createElement('span');number.textContent=String(i+1);overlay.append(number);overlay.addEventListener('click',()=>selectChoice(choice?.id));overlays.append(overlay);
   }
   $('region-select-button').disabled=true;
 }
@@ -209,7 +225,20 @@ function showResult(job){
   currentJob=job;const messages=resultMessages(job);status(job.status,messages.status);
   describeDirection();showPagination(job.pagination);$('download-button').textContent=downloadLabel();
   const policy=job.sizePolicy,report=$('slide-size-report');report.hidden=!policy;
-  if(policy){const source=job.pagination?.sizeSource==='default-16:9'?'문서 분할 기본 크기 16:9':({original:'원본 PPT 크기', 'first-slide':'첫 장 크기',custom:'사용자 선택'}[policy.source]??'선택한 크기');const inch=n=>Number((n/914400).toFixed(2)),color=(policy.marginColor??'#FFFFFF').toUpperCase();report.textContent=`PPT 크기 ${inch(policy.targetWidthEmu)} × ${inch(policy.targetHeightEmu)}인치 (${source}) · 비율 유지 · 가운데 배치 · 여백 ${color==='#FFFFFF'?'흰색':color}${policy.originalAspectMismatch?' · 원본 PPT 크기 정보와 장표 비율이 다름':''}`;const list=$('slide-size-list');list.replaceChildren();for(const [i,s] of (policy.slides??[]).entries()){const item=document.createElement('li'),scale=Number.isFinite(s.physicalScale)?`PPT 물리 크기 ${Math.round(s.physicalScale*100)}% (CSS 96dpi 기준)`:'PPT 물리 배율 확인 불가',margin=Number.isFinite(s.offsetXEmu)&&Number.isFinite(s.offsetYEmu)?`좌우 여백 각 ${inch(s.offsetXEmu)}인치, 위아래 여백 각 ${inch(s.offsetYEmu)}인치`:'여백 크기 확인 불가';item.textContent=`${i+1}번: ${scale}, ${margin}`;list.append(item);}$('slide-size-details').hidden=!list.children.length;}else $('slide-size-details').hidden=true;
+  if(policy){
+    const {targetWidthEmu:width,targetHeightEmu:height}=policy;
+    const ratio=width*9===height*16?'16:9 · ':width*3===height*4?'4:3 · ':'';
+    const source=job.pagination?.sizeSource==='default-16:9'?'문서 분할 기본 크기':({original:'원본 PPT 크기','first-slide':'첫 장 크기',custom:'사용자 선택'}[policy.source]??'선택한 크기');
+    const inch=n=>Number((n/914400).toFixed(2)),color=(policy.marginColor??'#FFFFFF').toUpperCase();
+    report.textContent=`PPT 크기 ${inch(width)} × ${inch(height)}인치 (${ratio}${source}) · 비율 유지 · 가운데 배치 · 여백 ${color==='#FFFFFF'?'흰색':color}${policy.originalAspectMismatch?' · 원본 PPT 크기 정보와 장표 비율이 다름':''}`;
+    const list=$('slide-size-list');list.replaceChildren();
+    for(const [i,s] of (policy.slides??[]).entries()){
+      const item=document.createElement('li'),scale=Number.isFinite(s.physicalScale)?`PPT 물리 크기 ${Math.round(s.physicalScale*100)}% (CSS 96dpi 기준)`:'PPT 물리 배율 확인 불가';
+      const margin=Number.isFinite(s.offsetXEmu)&&Number.isFinite(s.offsetYEmu)?`좌우 여백 각 ${inch(s.offsetXEmu)}인치, 위아래 여백 각 ${inch(s.offsetYEmu)}인치`:'여백 크기 확인 불가';
+      item.textContent=`${i+1}번: ${scale}, ${margin}`;list.append(item);
+    }
+    $('slide-size-details').hidden=!list.children.length;
+  }else $('slide-size-details').hidden=true;
   if(job.previewKind==='source')$('quality-note').textContent='입력 HTML 미리보기입니다. PPT의 크기와 여백은 위 안내를 확인해 주세요.';
   jobActions();
   $('download-button').disabled=!job.exportAvailable;$('download-button').hidden=Boolean(job.partialExportAvailable);
@@ -225,6 +254,7 @@ async function analyzeFile(viewport){
   showPagination();
   const thisRevision=++revision,previousJob=currentJob;controller?.abort();controller=new AbortController();const signal=controller.signal;selectableJobId=null;$('region-reselect-button').hidden=true;$('slide-size-report').hidden=true;$('slide-size-details').hidden=true;busy=true;jobActions();clearDownload();hideRegions();$('preview-area').hidden=true;$('quality-note').hidden=true;$('empty-preview').hidden=false;$('empty-preview').querySelector('p').textContent='입력을 분석하고 있습니다.';$('preview-image').removeAttribute('src');$('analyze-button').disabled=true;$('analyze-button').textContent='장표를 분석하고 있습니다…';status('analyzing','글꼴과 이미지를 읽고 실제 장표 배치를 확인하고 있습니다.');$('diagnostics').hidden=true;$('diagnostics').open=false;
   const noticeTimer=setTimeout(()=>{if(thisRevision===revision&&!signal.aborted&&$('duration-note').hidden){$('duration-note').textContent='장표를 분석하는 데 시간이 걸리고 있어요. 잠시만 기다려 주세요.';$('duration-note').hidden=false;}},20000);
+  let verifiedChoiceId=null;
   try{
     rememberCleanup(previousJob);await cleanupOutstanding();
     if(thisRevision!==revision||signal.aborted)return;
@@ -250,13 +280,38 @@ async function analyzeFile(viewport){
       currentJob=job;jobActions();status('analyzing','장표로 사용할 수 있는 영역을 찾고 있습니다.');
       const removed=await apiPost(`/api/jobs/${job.id}`,undefined,signal,'DELETE');if(thisRevision!==revision||signal.aborted)return;
       if(!removed.ok&&removed.status!==404)throw new Error('이전 분석을 정리하지 못했습니다. 다시 시도해 주세요.');currentJob=null;
-      const inspectionInput={html:input.html,assets:input.assets,fileName:input.fileName,slideSelector:input.slideSelector,sizePolicy:input.sizePolicy,...(viewport?{viewport}:{})};
-      const {response:inspected,data:candidateJob}=await postJob('/api/inspect',inspectionInput,signal);if(thisRevision!==revision||signal.aborted){rememberCleanup(candidateJob);if(cleanupJobs.size||cleanupRequests.size)void cleanupOutstanding().catch(()=>{});return;}
-      if(!inspected.ok||!candidateJob.id||!candidateJob.inspection)throw new Error(candidateJob.error??'장표 후보를 확인하지 못했습니다. 다시 분석해 주세요.');
+      const inspectionInput={html:input.html,assets:input.assets,fileName:input.fileName,slideSelector:input.slideSelector,sizePolicy:input.sizePolicy};
+      const inspectAt=async size=>{
+        const {response,data}=await postJob('/api/inspect',{...inspectionInput,...(size?{viewport:size}:{})},signal);
+        if(thisRevision!==revision||signal.aborted){rememberCleanup(data);if(cleanupJobs.size||cleanupRequests.size)void cleanupOutstanding().catch(()=>{});return null;}
+        if(!response.ok||!data.id||!data.inspection)throw new Error(data.error??'장표 후보를 확인하지 못했습니다. 다시 분석해 주세요.');
+        return data;
+      };
+      let candidateJob=await inspectAt(viewport);
+      if(!candidateJob)return;
+      const {suggestedViewport,suggestedRegionKey,choices}=candidateJob.inspection;
+      if(!viewport&&suggestedViewport&&suggestedRegionKey&&!choices.some(choice=>choice.convertible)){
+        currentJob=candidateJob;
+        status('analyzing',`장표가 잘려 원래 크기(${suggestedViewport.width} × ${suggestedViewport.height}px)로 다시 분석하고 있습니다.`);
+        const discarded=await apiPost(`/api/jobs/${candidateJob.id}`,undefined,signal,'DELETE');
+        if(thisRevision!==revision||signal.aborted)return;
+        if(discarded.ok||discarded.status===404){
+          currentJob=null;
+          viewport=suggestedViewport;
+          candidateJob=await inspectAt(viewport);
+          if(!candidateJob)return;
+          const frame=candidateJob.inspection.verifiedViewportFrame;
+          if(frame?.key===suggestedRegionKey&&candidateJob.inspection.choices.some(c=>c.convertible&&c.id===frame.choiceId))verifiedChoiceId=frame.choiceId;
+        }
+      }
       showRegions(candidateJob,viewport);
     }else showResult(job);
   }catch(error){if(error.name!=='AbortError'&&thisRevision===revision){status('failed',error.message);$('empty-preview').querySelector('p').textContent='분석을 마치지 못했습니다. 위 안내를 확인한 뒤 다시 시도해 주세요.';}}
   finally{clearTimeout(noticeTimer);if(thisRevision===revision){busy=false;jobActions();$('analyze-button').disabled=false;$('analyze-button').textContent='입력 다시 분석';}}
+  if(verifiedChoiceId&&thisRevision===revision&&!signal.aborted){
+    selectedChoiceId=verifiedChoiceId;
+    await analyzeSelectedRegion();
+  }
 }
 $('analyze-form').addEventListener('submit',event=>{event.preventDefault();void analyzeFile();});
 $('region-fit-button').addEventListener('click',()=>{

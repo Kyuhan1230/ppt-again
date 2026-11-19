@@ -16,6 +16,7 @@ test('a clipped fixed canvas can be reinspected at its own size with simple deco
   const input={html,viewport:{width:480,height:300}};
   const {inspection:clipped}=await runConversion({operation:'inspect-html',input});
   assert.deepEqual(clipped.suggestedViewport,{width:640,height:360});
+  assert.ok(clipped.suggestedRegionKey);
   assert.ok(clipped.uncertainties.includes('render-pixels-not-fully-observed'));
   assert.ok(clipped.choices.every(c=>!c.convertible));
   const fitted={...input,viewport:clipped.suggestedViewport};
@@ -23,6 +24,7 @@ test('a clipped fixed canvas can be reinspected at its own size with simple deco
   const choice=inspection.choices.find(c=>c.scope==='elements'&&c.convertible&&c.regionIds.some(id=>inspection.regions.some(r=>r.id===id&&r.bounds.width===640&&r.bounds.height===360)));
   assert.ok(choice,JSON.stringify(inspection.choices));
   assert.notEqual(clipped.snapshotId,inspection.snapshotId);
+  assert.deepEqual(inspection.verifiedViewportFrame,{key:clipped.suggestedRegionKey,choiceId:choice.id});
   const {measured}=await runConversion({operation:'analyze-html-selection',input:{...fitted,snapshotId:inspection.snapshotId,choiceId:choice.id}});
   assert.equal(measured.diagnostics.filter(d=>d.severity==='error').length,0,JSON.stringify(measured.diagnostics));
   assert.equal(measured.model.slides.length,1);

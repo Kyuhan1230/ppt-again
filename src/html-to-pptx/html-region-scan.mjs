@@ -164,9 +164,9 @@ export function scanHtmlRegions({selector,svgPaths=[],deckPaths=[],maxRegions=50
     const specifiedWidth=el.computedStyleMap?.().get('width')?.toString(),specifiedHeight=el.computedStyleMap?.().get('height')?.toString();
     const fixed=Boolean(box&&/^\d+(?:\.\d+)?px$/.test(specifiedWidth??'')&&/^\d+(?:\.\d+)?px$/.test(specifiedHeight??'')&&s.transform==='none');
     const rootSizeMismatch=contentBoxExpands(s);
-    const centeredFrame=fixed&&ancestor?.clip&&getComputedStyle(el.parentElement).position==='fixed'&&
+    const centeredFrame=fixed&&ancestor?.clip&&ancestor.position==='fixed'&&s.translate==='none'&&s.rotate==='none'&&s.scale==='none'&&
       Math.abs(r.left+r.right-innerWidth)<.01&&Math.abs(r.top+r.bottom-innerHeight)<.01&&
-      (r.left<0||r.top<0)&&r.width>=300&&r.height>=200&&Number.isInteger(r.width)&&Number.isInteger(r.height);
+      r.width>=300&&r.height>=200&&Number.isInteger(r.width)&&Number.isInteger(r.height);
     return {index:i,selector:internalSelector(el),fixed,centeredFrame,transformed:s.transform!=='none',rootSizeMismatch,ancestorAppearance,rootAppearance:st.rootAppearance,rootDecorations:st.rootDecorations,sourcePath:el.dataset.sourcePath,parent:parentIndex.get(el),directParent:index.has(el.parentElement),neutralWrapper:st.neutral&&(children.get(el)?.length??0)===1,bounds:box,visibility,evidence,counts:{...stat},overlaps:[],tag:el.localName,signature};
   });
   const ancestors=raw.map(r=>{const found=new Set();for(let p=r.parent;p!==null;p=raw[p].parent)found.add(p);return found;});
